@@ -2,6 +2,8 @@
 
 **Model Arena** is a class MVP for safer machine-learning releases using shadow testing, canary traffic, and automatic rollback.
 
+See [`PLAN.md`](PLAN.md) for the architecture, full model lifecycle, service responsibilities, rollout policy, deployment plan, and implementation milestones.
+
 ## Repository areas
 
 - `frontend/`: Next.js, TypeScript, Bun, and Biome control panel; deployed separately to Vercel.

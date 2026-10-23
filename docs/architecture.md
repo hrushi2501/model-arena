@@ -15,4 +15,6 @@ The control API owns the current champion/candidate versions and canary percenta
 
 ## Current scaffold
 
-The API and model server currently expose liveness routes only. The worker, database integration, DVC stages, MLflow server, metrics, and rollout state machine remain to be implemented.
+Compose currently defines PostgreSQL, RabbitMQ, an MLflow server, the control API, and Nginx. The model servers and Prometheus/Grafana are optional Compose profiles. The API and model server expose liveness routes only; the worker, database integration, DVC stages, training/registration workflow, prediction endpoint, metrics instrumentation, and rollout state machine remain to be implemented.
+
+See the root [`PLAN.md`](../PLAN.md) for the complete team plan, service contracts, rollout flow, and milestones.
