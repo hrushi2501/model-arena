@@ -1,0 +1,87 @@
+# JavaScript, TypeScript, and Next.js build output
+node_modules/
+.next/
+out/
+.vercel/
+.turbo/
+coverage/
+*.tsbuildinfo
+
+# Python environments, caches, and build output
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+pip-wheel-metadata/
+__pypackages__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+
+# Local environment files and credentials
+.env
+.env.*
+!.env.example
+!.env.*.example
+.secrets/
+secrets.local/
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Bun, uv, and other dependency lockfiles are intentionally kept in Git.
+# Ignore only local package-manager caches.
+.bun-cache/
+.uv-cache/
+
+# DVC local cache and machine-specific configuration.
+**/.dvc/cache/
+**/.dvc/tmp/
+**/.dvc/config.local
+**/.dvc/cache.lock
+.dvc-storage/
+dvc-storage/
+
+# Local datasets, model outputs, tracking data, and databases.
+backend/ml/data/raw/
+backend/ml/data/processed/
+backend/ml/models/
+mlruns/
+mlartifacts/
+mlflow.db
+mlflow.db-*
+*.sqlite
+*.sqlite3
+*.db
+postgres_data/
+rabbitmq_data/
+prometheus_data/
+grafana_data/
+
+# Logs, temporary files, and test reports
+*.log
+logs/
+tmp/
+temp/
+test-results/
+playwright-report/
+blob-report/
+
+# Editor and operating-system files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json

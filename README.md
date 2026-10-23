@@ -1,0 +1,27 @@
+# Model Arena
+
+**Model Arena** is a class MVP for safer machine-learning releases using shadow testing, canary traffic, and automatic rollback.
+
+## Repository areas
+
+- `frontend/`: Next.js, TypeScript, Bun, and Biome control panel; deployed separately to Vercel.
+- `backend/control_api/`: FastAPI prediction gateway and rollout control API.
+- `backend/model_serving/`: one version-pinned model server image, run once per active model version.
+- `backend/worker/`: planned RabbitMQ consumer for shadow comparisons and delayed labels.
+- `backend/ml/`: DVC pipeline and MLflow experiment/model registration workflow.
+- `database/`: migration and seed-data ownership.
+- `infra/`: local proxy and monitoring configuration.
+- `compose.yaml`: local multi-container stack (to be completed as services are implemented).
+
+## Local setup
+
+1. Install Bun, Python 3.12, Docker, and Docker Compose.
+2. Copy `.env.example` to `.env` and replace the local database password.
+3. Run `bun install` from the repository root, then `bun run dev` for the frontend.
+4. Run `make stack` for the API and core infrastructure. Run `make stack-full` to also start the model-server and observability profiles.
+
+The current frontend is a static starter screen. The API and model server expose liveness routes only. Training stages, inference, persistence, queue processing, canary decisions, Prometheus scraping, and the worker remain to be implemented.
+
+## Security
+
+See [`SECURITY.md`](SECURITY.md) for GitGuardian scanning setup. Never commit `.env` or real credentials.

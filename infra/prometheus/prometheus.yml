@@ -1,0 +1,22 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["prometheus:9090"]
+
+  - job_name: control-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["control-api:8000"]
+
+  - job_name: model-champion
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["model-champion:8000"]
+
+  - job_name: model-candidate
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["model-candidate:8000"]

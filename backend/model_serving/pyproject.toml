@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "model-arena-model-serving"
+version = "0.1.0"
+description = "Version-pinned prediction service for Model Arena"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "mlflow>=3,<4",
+  "numpy>=2,<3",
+  "scikit-learn>=1.6,<2",
+  "uvicorn[standard]>=0.34,<1",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[dependency-groups]
+dev = ["mypy>=1.15,<2", "pytest>=8.3,<9", "ruff>=0.11,<1"]

@@ -1,0 +1,1 @@
+"""Prediction and health routes."""
