@@ -103,7 +103,7 @@ flowchart TD
 ### Main service responsibilities
 
 | Service | Owns | Does not own |
-|---|---|---|
+| --- | --- | --- |
 | `frontend` | Operator-facing model, rollout, and audit UI | Model training or model routing decisions |
 | `control-api` | Prediction routing, rollout controls, active rollout state, API validation | Long-running queue consumption |
 | `model-serving` | Loading one concrete MLflow model version, prediction, readiness | Deciding which version gets traffic |
@@ -119,7 +119,7 @@ Keep the decision rules as a module in `control-api` for the MVP. The worker can
 ## 5. Technology choices
 
 | Area | Choice | Why it is here |
-|---|---|---|
+| --- | --- | --- |
 | Frontend | Next.js App Router + TypeScript | Model Arena operator UI and server-side API proxy |
 | JS package tooling | Bun workspaces | One JS workspace and one root `bun.lock` |
 | JS lint/format | Biome | TypeScript linting and formatting |
@@ -230,7 +230,7 @@ Keep policy values in a versioned configuration file. Record the policy version 
 The initial application schema should include:
 
 | Table | Purpose |
-|---|---|
+| --- | --- |
 | `model_deployments` | Concrete MLflow version, run ID, model signature, data/pipeline reference, offline metrics, readiness, and deployment status |
 | `rollouts` | Champion and candidate versions, state, current stage/percentage, policy version, and timestamps |
 | `predictions` | Prediction ID, selected model version, rollout ID, latency, result metadata, and status; avoid storing raw feature payloads by default |
@@ -245,7 +245,7 @@ Use Alembic migrations under `database/migrations/`. App repositories own query 
 Initial route proposal (all application routes versioned under `/api/v1`):
 
 | Endpoint | Purpose |
-|---|---|
+| --- | --- |
 | `POST /api/v1/predict` | Route and return a prediction |
 | `POST /api/v1/feedback` | Attach delayed ground-truth label to prediction ID |
 | `GET /api/v1/models` | List registered and serving model versions |
@@ -395,7 +395,7 @@ Python dependencies are declared per service in each `pyproject.toml`. Keep gene
 ## 16. Implementation milestones
 
 | Milestone | Deliverable | Completion evidence |
-|---|---|---|
+| --- | --- | --- |
 | 0. Foundation | Repo scaffold, GitGuardian, Compose dependencies, UI shell | Team can explain ownership and start local infrastructure |
 | 1. Reproducible ML | DVC prepare/train/evaluate; MLflow runs and registered v1/v2 | Re-run pipeline and compare recorded metrics/model versions |
 | 2. Serving | Model server loads exact URI; API routes champion predictions | Health/readiness and real prediction response include model version |

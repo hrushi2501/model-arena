@@ -7,11 +7,15 @@ Model Arena uses GitGuardian in two places:
 
 ## Enable the GitHub Actions scan
 
-1. Create a GitGuardian API key with the `scan` scope. A service-account token is suitable for CI.
+1. Create a GitGuardian token with the `scan` scope. A personal access token works for a personal/free workspace. A service-account token can be used when your workspace plan supports service accounts.
 2. In GitHub, open **Settings → Secrets and variables → Actions** for this repository.
 3. Add a repository secret named `GITGUARDIAN_API_KEY` with the token as its value.
-4. Push a commit or run **GitGuardian secret scan** from the Actions tab.
-5. After the first successful run, consider requiring the `Scan for exposed secrets` check in branch protection.
+4. Paste the token value only: no `Token` prefix, quotes, or surrounding whitespace. If replacing the value, delete and recreate the Actions secret; GitHub does not reveal an existing secret value.
+5. The workflow defaults to the GitGuardian US instance. For an EU or self-hosted workspace, add a repository variable named `GITGUARDIAN_INSTANCE` with that workspace's dashboard URL (for example, `https://dashboard.eu1.gitguardian.com`).
+6. Push a commit or run **GitGuardian secret scan** from the Actions tab.
+7. After the first successful run, consider requiring the `Scan for exposed secrets` check in branch protection.
+
+If the action reports `Invalid GitGuardian API key`, replace the secret with a newly generated token that has the `scan` scope, and confirm the instance variable matches the workspace where that token was created. Do not paste the token into an issue, chat, workflow file, or command that will be saved in shell history.
 
 Never commit the token or put it in `.env.example`.
 
