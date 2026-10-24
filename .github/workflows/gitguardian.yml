@@ -18,7 +18,28 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Validate GitGuardian configuration
+        id: gg-config
+        shell: bash
+        env:
+          GITGUARDIAN_API_KEY: ${{ secrets.GITGUARDIAN_API_KEY }}
+        run: |
+          if [ -n "$GITGUARDIAN_API_KEY" ]; then
+            echo "has_api_key=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "::warning::GITGUARDIAN_API_KEY is not available in this pull request context. Skipping GitGuardian scan."
+            echo "has_api_key=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "::error::Missing GITGUARDIAN_API_KEY repository secret. Add a token with scan scope in Settings > Secrets and variables > Actions."
+          exit 1
+
       - name: Scan with GitGuardian
+        if: ${{ steps.gg-config.outputs.has_api_key == 'true' }}
         uses: GitGuardian/ggshield-action@v1
         env:
           GITHUB_PUSH_BEFORE_SHA: ${{ github.event.before }}

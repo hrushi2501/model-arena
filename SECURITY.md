@@ -16,6 +16,7 @@ Model Arena uses GitGuardian in two places:
 7. After the first successful run, consider requiring the `Scan for exposed secrets` check in branch protection.
 
 If the action reports `Invalid GitGuardian API key`, replace the secret with a newly generated token that has the `scan` scope, and confirm the instance variable matches the workspace where that token was created. Do not paste the token into an issue, chat, workflow file, or command that will be saved in shell history.
+If `GITGUARDIAN_API_KEY` is unavailable in an untrusted `pull_request` context (for example, from forks), the workflow logs a warning and skips the scan for that run. Pushes and manual dispatches still require the secret and fail fast when it is missing.
 
 Never commit the token or put it in `.env.example`.
 
