@@ -5,6 +5,8 @@ description: Instrument Model Arena services with Prometheus metrics and configu
 
 # Model Arena observability
 
+Follow the required progress workflow in root `AGENTS.md`: read [progress.md](../../../progress.md) and [checklist.md](../../../checklist.md), respect lane ownership, and update task status and verification evidence in the same meaningful change. Check tasks only when their acceptance evidence exists; preserve other lanes' updates.
+
 Use this skill for metrics, health instrumentation, Grafana provisioning, or service observability. Read the existing Prometheus/Grafana configuration and `docs/rollout-policy.md` before changing metric semantics.
 
 ## Metrics

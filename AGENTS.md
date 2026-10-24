@@ -7,6 +7,13 @@ Before changing code, configuration, documentation, or infrastructure:
 3. Preserve the boundary between implemented behavior and planned behavior. Do not claim a pipeline, deployment, metric, or control works until its implementation is present and verified.
 4. Keep changes small but complete. Follow existing patterns, update every affected caller/configuration, and do not add dependencies or services without a concrete need.
 5. Never commit credentials, `.env` files, raw datasets, or sensitive prediction payloads. Follow `SECURITY.md`.
+6. Read [`progress.md`](progress.md) and [`checklist.md`](checklist.md). Identify the task IDs, lane ownership and dependencies before implementation; coordinate changes to shared files with affected owners.
+
+## Required progress updates
+
+For every meaningful code, configuration, infrastructure or documentation change, update `progress.md` in the same change with the task IDs, owner/branch, changed behavior, source/artifact evidence, relevant checks and outcomes, blockers and next handoff. Follow its update template. Update the relevant `checklist.md` boxes only when their acceptance evidence exists; partial or unverified work stays unchecked. Record material findings from read-only reviews when they change project status.
+
+Distinguish work implemented on a branch, merged work, runtime verification and hosted deployment. Do not invent test results, commit IDs or completion claims. Preserve other lanes' entries when resolving documentation conflicts. A documentation update alone does not authorize committing, pushing, merging or deployment; follow the user's scope for those actions.
 
 ## Skill routing
 

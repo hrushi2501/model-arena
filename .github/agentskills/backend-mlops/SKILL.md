@@ -5,6 +5,8 @@ description: Implement Model Arena's FastAPI services, model serving, rollout an
 
 # Model Arena backend and MLOps
 
+Follow the required progress workflow in root `AGENTS.md`: read [progress.md](../../../progress.md) and [checklist.md](../../../checklist.md), respect lane ownership, and update task status and verification evidence in the same meaningful change. Check tasks only when their acceptance evidence exists; preserve other lanes' updates.
+
 Use this skill for API or service changes, inference and routing, rollout policy, queue work, application persistence, training pipelines, or MLflow integration. Read `PLAN.md` and the affected service README first. The plan describes intended behavior; verify source before assuming it exists.
 
 ## Service boundaries

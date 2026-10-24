@@ -2,6 +2,8 @@
 
 > **Project status:** starter scaffold. This plan describes the intended MVP and the current repository state. The API and model server currently expose liveness checks; the rollout system, training stages, worker, prediction endpoint, and metrics are not implemented yet.
 
+Execution tracking lives in [`checklist.md`](checklist.md): phased tasks, four developer lanes, dependency handoffs and acceptance gates. [`progress.md`](progress.md) records implemented behavior and verification; agents must maintain it as directed by `AGENTS.md`.
+
 ## 1. Project summary
 
 **Model Arena** is a local-first MLOps application for safely testing and releasing machine learning model versions. It lets an operator register a candidate, compare it with the current champion in shadow mode, gradually send it prediction traffic, and promote or roll it back using explicit evidence.
@@ -405,7 +407,7 @@ Python dependencies are declared per service in each `pyproject.toml`. Keep gene
 | 6. Observability and UI | Prometheus metrics, Grafana panels, frontend control pages | UI, dashboard, and audit agree on release state and reason |
 | 7. Assignment packaging | CI, Compose instructions, demo runbook, report/screenshots | A teammate can run the demo from documented steps |
 
-Agree on the API and event contracts before splitting implementation. A practical team split is: ML pipeline/registry, backend and rollout policy, frontend controls, infrastructure/metrics, and one integration owner who reviews the shared contracts.
+Agree on the API and event contracts before integrating implementation. Use the four lanes in `checklist.md`: A owns ML pipeline/registry and model serving; B owns the control API, database and rollout policy and coordinates integration; C owns the frontend; D owns the worker, infrastructure, monitoring and CI. Integration coordination belongs to B rather than a fifth developer. Each service owner instruments their own code against the metric contract coordinated by D.
 
 ## 17. Definition of done for the MVP
 

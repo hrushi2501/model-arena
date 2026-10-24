@@ -5,6 +5,8 @@ description: Protect Model Arena source, CI, containers, data, and Git history f
 
 # Model Arena repository security
 
+Follow the required progress workflow in root `AGENTS.md`: read [progress.md](../../../progress.md) and [checklist.md](../../../checklist.md), respect lane ownership, and update task status and verification evidence in the same meaningful change. Check tasks only when their acceptance evidence exists; preserve other lanes' updates.
+
 Use this skill for GitGuardian/GitHub Actions, environment variables, credentials, Docker exposure, dependency security, or dataset/payload handling. Read `SECURITY.md`, `.gitguardian.yaml`, and the relevant CI/container configuration before editing.
 
 ## Secrets and GitGuardian

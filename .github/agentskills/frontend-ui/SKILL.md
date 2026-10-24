@@ -5,6 +5,8 @@ description: Build or change Model Arena's Next.js operator interface, visual sy
 
 # Model Arena frontend UI
 
+Follow the required progress workflow in root `AGENTS.md`: read [progress.md](../../../progress.md) and [checklist.md](../../../checklist.md), respect lane ownership, and update task status and verification evidence in the same meaningful change. Check tasks only when their acceptance evidence exists; preserve other lanes' updates.
+
 Use the existing Next.js App Router, TypeScript, Bun workspace, Biome, Tailwind styling, and installed UI primitives. Inspect the relevant page, component, CSS tokens, and API client before adding a pattern or dependency. The frontend is an operator console for live model releases: make system state, evidence, and consequences easy to see.
 
 ## Visual system

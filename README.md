@@ -4,6 +4,8 @@
 
 See [`PLAN.md`](PLAN.md) for the architecture, full model lifecycle, service responsibilities, rollout policy, deployment plan, and implementation milestones.
 
+Use [`checklist.md`](checklist.md) for phased tasks, four development lanes, dependencies and acceptance gates. Read [`progress.md`](progress.md) for the current implementation status, verified evidence, blockers and ownership. Developers and agents update progress with each meaningful change.
+
 ## Agent guidance
 
 Repository-level instructions live in [`AGENTS.md`](AGENTS.md); coding agents should read it before making changes. The project skills in [`.github/agentskills/`](.github/agentskills/) cover frontend UI, minimal complete implementation (Ponytail), backend/MLOps, observability, and repository security. Claude Code, GitHub Copilot, and Cursor entrypoint files point back to the same guidance.
