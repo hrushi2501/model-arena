@@ -20,6 +20,10 @@ If `GITGUARDIAN_API_KEY` is unavailable in an untrusted `pull_request` context (
 
 Never commit the token or put it in `.env.example`.
 
+## Authentication issue resolved
+
+On October 24, 2026, the missing `GITGUARDIAN_API_KEY` repository secret was configured. The manual [GitGuardian workflow run on `main`](https://github.com/hrushi2501/model-arena/actions/runs/40113535782) at commit `5e899c1` completed successfully, verifying authentication for that run. Future runs still require an active token with the `scan` scope.
+
 ## Enable the local pre-commit hook
 
 Install `ggshield` and `pre-commit`, authenticate `ggshield` with `ggshield auth login`, then run:
