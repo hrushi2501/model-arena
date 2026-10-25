@@ -129,7 +129,8 @@ def train_and_evaluate():
             mlflow.log_metric("macro_f1", champ_f1)
             mlflow.sklearn.log_model(
                 sk_model=champion,
-                artifact_path="model",
+                name="model",
+                serialization_format="cloudpickle",
                 registered_model_name="wine-classifier",
             )
         logger.info("Champion logged and registered to MLflow as wine-classifier")
@@ -141,7 +142,8 @@ def train_and_evaluate():
             mlflow.log_metric("macro_f1", cand_f1)
             mlflow.sklearn.log_model(
                 sk_model=candidate,
-                artifact_path="model",
+                name="model",
+                serialization_format="cloudpickle",
                 registered_model_name="wine-classifier",
             )
         logger.info("Candidate logged and registered to MLflow as wine-classifier")

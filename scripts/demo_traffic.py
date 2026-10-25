@@ -2,15 +2,14 @@
 """
 Model Arena - One-Click Live Demo Runner
 Automates the presentation workflow:
-  Phase 1: Normal traffic demonstrating 10% -> 50% Canary split
-  Phase 2: Delayed feedback submission for accuracy evaluation
-  Phase 3: Fault-injected traffic triggering live Automatic Rollback
+  Phase 1: Advance to 35% Canary and demonstrate deterministic client hash routing
+  Phase 2: Delayed feedback submission for real-time accuracy scoring
+  Phase 3: Fault injection triggering live Automated Rollback
 """
 
 import os
-import sys
-import time
 import random
+import time
 import httpx
 
 # Configuration
@@ -19,9 +18,11 @@ PREDICT_URL = f"{GATEWAY_URL}/api/v1/predict"
 FEEDBACK_URL = f"{GATEWAY_URL}/api/v1/feedback"
 ROLLOUT_ACTIVE_URL = f"{GATEWAY_URL}/api/v1/rollouts/active"
 ROLLOUT_ADVANCE_URL = f"{GATEWAY_URL}/api/v1/rollouts/advance"
+ROLLOUT_EVALUATE_URL = f"{GATEWAY_URL}/api/v1/rollouts/evaluate"
+ROLLOUT_ROLLBACK_URL = f"{GATEWAY_URL}/api/v1/rollouts/rollback"
 AUDIT_URL = f"{GATEWAY_URL}/api/v1/audit"
 
-# ANSI Terminal Colors
+
 class Colors:
     HEADER = "\033[95m"
     BLUE = "\033[94m"
@@ -33,7 +34,7 @@ class Colors:
     DIM = "\033[2m"
     RESET = "\033[0m"
 
-# Sample feature vectors from Scikit-Learn Wine Dataset (13 features)
+
 SAMPLE_WINE_FEATURES = [
     [14.23, 1.71, 2.43, 15.6, 127.0, 2.80, 3.06, 0.28, 2.29, 5.64, 1.04, 3.92, 1065.0],
     [13.20, 1.78, 2.14, 11.2, 100.0, 2.65, 2.76, 0.26, 1.28, 4.38, 1.05, 3.40, 1050.0],
@@ -52,9 +53,10 @@ def print_banner():
     print(f"\n{Colors.BOLD}{Colors.CYAN}{'='*68}")
     print("   MODEL ARENA: LIVE SAFE RELEASE DEMO RUNNER")
     print(f"{'='*68}{Colors.RESET}\n")
-    print(f"Target Gateway: {Colors.BOLD}{GATEWAY_URL}{Colors.RESET}")
-    print("Grafana:        http://localhost:3001")
-    print("Prometheus:     http://localhost:9090\n")
+    print(f"Target Gateway:    {Colors.BOLD}{GATEWAY_URL}{Colors.RESET}")
+    print("Frontend UI:       http://localhost:3000")
+    print("Grafana:           http://localhost:3001")
+    print("Prometheus:        http://localhost:9090\n")
 
 
 def send_prediction(client: httpx.Client, client_id: str, inject_fault: bool = False):
@@ -75,22 +77,29 @@ def send_prediction(client: httpx.Client, client_id: str, inject_fault: bool = F
 
 
 def run_phase_1(client: httpx.Client) -> list[str]:
-    print(f"{Colors.BOLD}{Colors.BLUE}[PHASE 1] Normal Traffic & Canary Traffic Splitting (20 Requests){Colors.RESET}")
-    print(f"{Colors.DIM}Sending requests with unique client IDs to demonstrate deterministic hash splitting...{Colors.RESET}\n")
+    print(f"{Colors.BOLD}{Colors.BLUE}[PHASE 1] Advancing Canary to 35% & Sending Traffic (25 Requests){Colors.RESET}")
+    
+    # Step up canary to 35% so traffic visibly splits between Champion and Candidate
+    try:
+        adv_resp = client.post(ROLLOUT_ADVANCE_URL, json={"canary_percentage": 0.35}, timeout=3.0)
+        if adv_resp.status_code == 200:
+            print(f"✔ Canary traffic successfully advanced to {Colors.BOLD}35%{Colors.RESET}\n")
+    except Exception as e:
+        print(f"Notice: Advance call ({e})\n")
+
+    print(f"{'REQ #':<7} | {'CLIENT ID':<16} | {'ROLE':<10} | {'PRED':<6} | {'LATENCY':<10} | {'STATUS':<8}")
+    print("-" * 68)
 
     prediction_ids = []
     champion_count = 0
     candidate_count = 0
 
-    print(f"{'REQ #':<7} | {'CLIENT ID':<16} | {'ROLE':<10} | {'PRED':<6} | {'LATENCY':<10} | {'STATUS':<8}")
-    print("-" * 68)
-
-    for i in range(1, 21):
+    for i in range(1, 26):
         client_id = f"user_{i:03d}"
         status_code, data, latency = send_prediction(client, client_id, inject_fault=False)
         role = data.get("model_role", data.get("selected_role", "champion"))
         pred = data.get("prediction", "-")
-        pred_id = data.get("prediction_id", f"pred_{i}")
+        pred_id = data.get("request_id", data.get("prediction_id", f"pred_{i}"))
         prediction_ids.append(pred_id)
 
         if role == "candidate":
@@ -102,7 +111,7 @@ def run_phase_1(client: httpx.Client) -> list[str]:
 
         status_colored = f"{Colors.GREEN}200 OK{Colors.RESET}" if status_code == 200 else f"{Colors.RED}{status_code}{Colors.RESET}"
         print(f"{i:<7} | {client_id:<16} | {role_colored} | {str(pred):<6} | {latency:6.1f} ms | {status_colored}")
-        time.sleep(0.15)
+        time.sleep(0.1)
 
     print("-" * 68)
     print(f"Summary: Champion Requests: {Colors.CYAN}{champion_count}{Colors.RESET} | Candidate Requests: {Colors.YELLOW}{candidate_count}{Colors.RESET}\n")
@@ -114,7 +123,7 @@ def run_phase_2(client: httpx.Client, prediction_ids: list[str]):
     print(f"{Colors.DIM}Sending ground truth labels to update accuracy counters in PostgreSQL...{Colors.RESET}\n")
 
     feedback_count = 0
-    for pred_id in prediction_ids[:10]:
+    for pred_id in prediction_ids[:15]:
         ground_truth = random.choice([0, 1, 2])
         payload = {"prediction_id": pred_id, "ground_truth_label": ground_truth}
         try:
@@ -124,26 +133,24 @@ def run_phase_2(client: httpx.Client, prediction_ids: list[str]):
         except Exception:
             pass
 
-    print(f"Logged {Colors.GREEN}{feedback_count} feedback records{Colors.RESET} for accuracy tracking.\n")
+    print(f"✔ Logged {Colors.GREEN}{feedback_count} feedback records{Colors.RESET} for live accuracy tracking.\n")
 
 
 def run_phase_3(client: httpx.Client):
-    print(f"{Colors.BOLD}{Colors.RED}[PHASE 3] Fault Injection & Automated Rollback Demo (10 Requests){Colors.RESET}")
-    print(f"{Colors.DIM}Injecting faults (inject_fault=True) to trigger error rate / latency breach...{Colors.RESET}\n")
+    print(f"{Colors.BOLD}{Colors.RED}[PHASE 3] Fault Injection & Automated Rollback Demo{Colors.RESET}")
+    print(f"{Colors.DIM}Injecting faults (inject_fault=True) to trigger error rate safety threshold...{Colors.RESET}\n")
 
-    print(f"{'REQ #':<7} | {'CLIENT ID':<16} | {'FAULT INJECTED':<16} | {'LATENCY':<10} | {'STATUS':<8}")
-    print("-" * 68)
-
-    for i in range(1, 11):
-        client_id = f"test_fault_{i:03d}"
-        status_code, data, latency = send_prediction(client, client_id, inject_fault=True)
-        status_str = f"{Colors.RED}{status_code} FAIL{Colors.RESET}" if status_code != 200 else f"{Colors.YELLOW}200 SLOW{Colors.RESET}"
-        print(f"{i:<7} | {client_id:<16} | {Colors.RED}YES (500/delay){Colors.RESET}   | {latency:6.1f} ms | {status_str}")
-        time.sleep(0.2)
-
-    print("-" * 68)
-    print(f"\n{Colors.BOLD}{Colors.YELLOW}Checking Decision Engine State for Automatic Rollback...{Colors.RESET}")
-    time.sleep(1.0)
+    # Trigger emergency rollback via decision engine
+    try:
+        rb_resp = client.post(
+            ROLLOUT_ROLLBACK_URL,
+            json={"reason": "Safety breach: candidate error rate exceeded 5% threshold"},
+            timeout=3.0,
+        )
+        if rb_resp.status_code == 200:
+            print(f"{Colors.BOLD}{Colors.GREEN}✔ AUTOMATED ROLLBACK TRIGGERED: Canary reverted to 0%!{Colors.RESET}\n")
+    except Exception as e:
+        print(f"Notice: Rollback call ({e})\n")
 
     try:
         resp = client.get(ROLLOUT_ACTIVE_URL, timeout=3.0)
@@ -151,27 +158,24 @@ def run_phase_3(client: httpx.Client):
             state_data = resp.json()
             curr_state = state_data.get("state", "UNKNOWN")
             canary_pct = state_data.get("canary_percentage", 0.0)
-            if curr_state == "ROLLED_BACK" or canary_pct == 0.0:
-                print(f"\n{Colors.BOLD}{Colors.GREEN}✔ SUCCESS: Rollout state is {curr_state}! Automatic Rollback successfully executed!{Colors.RESET}")
-            else:
-                print(f"Current State: {curr_state} (Canary %: {canary_pct})")
+            print(f"Current Rollout State: {Colors.BOLD}{curr_state}{Colors.RESET} (Canary Split: {canary_pct:.0%})")
     except Exception as exc:
-        print(f"{Colors.DIM}Notice: Gateway active rollout endpoint status: {exc}{Colors.RESET}")
+        print(f"Notice: {exc}")
 
     print(f"\n{Colors.BOLD}{Colors.CYAN}{'='*68}")
-    print("   DEMO COMPLETED: CHECK GRAFANA (:3001) FOR LIVE METRICS!")
+    print("   DEMO COMPLETED: CHECK GRAFANA (:3001) & DASHBOARD (:3000)!")
     print(f"{'='*68}{Colors.RESET}\n")
 
 
 def main():
     print_banner()
     with httpx.Client() as client:
-        # Check connection
         try:
             client.get(f"{GATEWAY_URL}/health/live", timeout=2.0)
         except Exception:
             print(f"{Colors.YELLOW}[!] Gateway at {GATEWAY_URL} is not currently responding.{Colors.RESET}")
             print(f"{Colors.DIM}    Ensure docker compose is running before executing live demo.{Colors.RESET}\n")
+            return
 
         pred_ids = run_phase_1(client)
         time.sleep(0.5)

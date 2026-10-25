@@ -147,7 +147,7 @@ export default function OperatorControlPage() {
             Prometheus
           </a>
           <a
-            href="http://localhost:5000"
+            href="http://localhost:5001"
             target="_blank"
             rel="noreferrer"
             className="nav-link"

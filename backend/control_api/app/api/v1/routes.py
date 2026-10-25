@@ -16,6 +16,7 @@ from app.schemas.schemas import (
     RollbackRequest,
     RolloutStatusResponse,
 )
+from app.metrics import CANARY_PERCENTAGE, REQUEST_DURATION_SECONDS, REQUESTS_TOTAL, ROLLBACK_EVENTS_TOTAL
 from app.services.decision_engine import evaluate_rollout, execute_advance, execute_rollback
 from app.services.feedback import accuracy_summary
 from app.services.routing import CANDIDATE_URL, determine_serving_role, forward_prediction
@@ -36,6 +37,7 @@ def get_or_create_active_rollout(db: Session) -> Rollout:
         db.add(rollout)
         db.commit()
         db.refresh(rollout)
+    CANARY_PERCENTAGE.set(rollout.canary_percentage)
     return rollout
 
 
@@ -74,6 +76,12 @@ async def predict(request: PredictionRequest, db: Session = Depends(get_db)):
         }, allow_nan=False)))
     db.commit()
 
+    # Record Prometheus metrics for Grafana
+    status_label = "500" if result.get("status_code", 200) >= 500 else "200"
+    REQUESTS_TOTAL.labels(role=role, status=status_label).inc()
+    latency_sec = max(result.get("latency_ms", 1.0) / 1000.0, 0.001)
+    REQUEST_DURATION_SECONDS.observe(latency_sec)
+
     return PredictionResponse(
         prediction=result["prediction"],
         probabilities=result.get("probabilities"),
@@ -103,6 +111,7 @@ def advance_rollout(request: AdvanceRolloutRequest, db: Session = Depends(get_db
     """Advances canary traffic percentage (e.g. 10% -> 25% -> 50% -> 100% PROMOTED)."""
     rollout = get_or_create_active_rollout(db)
     updated = execute_advance(db, rollout, request.canary_percentage)
+    CANARY_PERCENTAGE.set(updated.canary_percentage)
     return RolloutStatusResponse(
         id=updated.id,
         champion_version=updated.champion_version,
@@ -118,6 +127,8 @@ def rollback_rollout(request: RollbackRequest, db: Session = Depends(get_db)):
     """Instantly reverts candidate traffic back to 0% and logs the reason."""
     rollout = get_or_create_active_rollout(db)
     updated = execute_rollback(db, rollout, reason=request.reason)
+    CANARY_PERCENTAGE.set(0.0)
+    ROLLBACK_EVENTS_TOTAL.inc()
     return RolloutStatusResponse(
         id=updated.id,
         champion_version=updated.champion_version,
@@ -141,8 +152,11 @@ def evaluate_active_rollout(db: Session = Depends(get_db)):
 
     if decision == "ROLLBACK":
         execute_rollback(db, rollout, reason=reason, details=stats)
+        CANARY_PERCENTAGE.set(0.0)
+        ROLLBACK_EVENTS_TOTAL.inc()
     elif decision == "PROMOTE":
         execute_advance(db, rollout)
+        CANARY_PERCENTAGE.set(rollout.canary_percentage)
 
     return EvaluateResponse(
         decision=decision,
