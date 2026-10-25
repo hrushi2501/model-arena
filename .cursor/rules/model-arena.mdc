@@ -1,6 +1,0 @@
----
-description: Model Arena repository architecture, implementation boundaries, and skill routing
-alwaysApply: true
----
-
-Read the root `AGENTS.md` before changing this repository. Read all relevant `.github/agentskills/*/SKILL.md` files before implementing a task. Follow the service documentation and `PLAN.md` for architecture changes. Preserve the distinction between planned and implemented behavior. Never commit secrets, `.env` files, raw datasets, or sensitive prediction payloads. The user's current request and repository instructions take precedence over generic defaults.

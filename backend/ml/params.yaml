@@ -1,7 +1,14 @@
-data:
+dataset:
+  name: wine
   test_size: 0.2
   random_state: 42
 
-model:
-  name: random_forest
+champion:
+  model_type: random_forest
+  n_estimators: 100
+  random_state: 42
+
+candidate:
+  model_type: gradient_boosting
+  n_estimators: 100
   random_state: 42
