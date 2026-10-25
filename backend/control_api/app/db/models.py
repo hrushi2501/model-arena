@@ -69,3 +69,13 @@ class ModelComparison(Base):
     candidate_pred = Column(Integer, nullable=False)
     is_match = Column(Boolean, nullable=False)
     timestamp = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class ShadowOutbox(Base):
+    """Unpublished shadow events, committed atomically with their predictions."""
+
+    __tablename__ = "shadow_outbox"
+
+    prediction_id = Column(String(64), ForeignKey("predictions.id"), primary_key=True)
+    payload_json = Column(Text, nullable=False)
+    available_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)

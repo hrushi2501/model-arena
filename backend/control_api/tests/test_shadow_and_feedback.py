@@ -1,5 +1,6 @@
 import asyncio
 import importlib.util
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, Mock
 
@@ -7,13 +8,9 @@ import httpx
 import pika
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
 from app.api.v1 import routes
-from app.db.models import Feedback, ModelComparison, Prediction, Rollout
-from app.db.session import Base, get_db
+from app.db.models import Feedback, ModelComparison, Prediction, Rollout, ShadowOutbox
 from app.main import app
 from app.services import queue
 from app.services.feedback import accuracy_summary
@@ -24,28 +21,6 @@ spec = importlib.util.spec_from_file_location(
 )
 worker_storage = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(worker_storage)
-
-
-@pytest.fixture
-def database():
-    engine = create_engine(
-        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
-    )
-    Base.metadata.create_all(engine)
-    sessions = sessionmaker(bind=engine)
-    old_override = app.dependency_overrides.get(get_db)
-
-    def dependency():
-        with sessions() as db:
-            yield db
-
-    app.dependency_overrides[get_db] = dependency
-    yield engine, sessions
-    if old_override is not None:
-        app.dependency_overrides[get_db] = old_override
-    else:
-        app.dependency_overrides.pop(get_db, None)
-    engine.dispose()
 
 
 def add_prediction(sessions, prediction_id="pred-1", role="champion", label=1):
@@ -129,7 +104,7 @@ def test_feedback_validation_and_served_candidate(database):
 
 @pytest.mark.parametrize("state", ["SHADOW", "READY", "CANARY", "PROMOTED"])
 @pytest.mark.parametrize("transition_during_inference", [False, True])
-def test_shadow_publish_runs_after_response_only_in_shadow(
+def test_shadow_event_is_durable_without_publishing_on_request(
     database, monkeypatch, state, transition_during_inference
 ):
     _, sessions = database
@@ -147,17 +122,9 @@ def test_shadow_publish_runs_after_response_only_in_shadow(
                 db.commit()
         return {"prediction": 1, "latency_ms": 1.0}
 
-    def publish(request_id, features, champion_pred, candidate_url):
-        assert events == ["champion", "response"]
-        with sessions() as db:
-            assert db.get(Prediction, request_id) is not None
-        assert features == [1.0, 2.0]
-        assert champion_pred == 1
-        assert candidate_url == routes.CANDIDATE_URL
-        events.append("published")
-
     monkeypatch.setattr(routes, "forward_prediction", forward)
-    monkeypatch.setattr(routes, "publish_shadow_task", publish)
+    publisher = Mock(side_effect=AssertionError("Publisher ran on the prediction path"))
+    monkeypatch.setattr(queue, "publish_shadow_task", publisher)
 
     async def observed_app(scope, receive, send):
         async def observed_send(message):
@@ -175,21 +142,34 @@ def test_shadow_publish_runs_after_response_only_in_shadow(
 
     result = asyncio.run(request())
     assert result.status_code == 200
-    if state == "SHADOW":
-        assert result.json()["model_role"] == "champion"
-        assert events == ["champion", "response", "published"]
-    else:
-        assert "published" not in events
+    publisher.assert_not_called()
+    with sessions() as db:
+        pending = db.get(ShadowOutbox, result.json()["request_id"])
+        assert (pending is not None) == (state == "SHADOW")
+        if pending is not None:
+            assert result.json()["model_role"] == "champion"
+            assert json.loads(pending.payload_json) == {
+                "request_id": result.json()["request_id"],
+                "features": [1.0, 2.0],
+                "champion_pred": 1,
+                "candidate_url": routes.CANDIDATE_URL,
+            }
 
 
 def test_publisher_contract_and_broker_failure(monkeypatch):
-    import json
-
     monkeypatch.setenv("RABBITMQ_URL", "amqp://rabbitmq:5672/")
     connection = MagicMock()
     connection.__enter__.return_value = connection
     monkeypatch.setattr(queue.pika, "BlockingConnection", Mock(return_value=connection))
-    assert queue.publish_shadow_task("req-1", [1.0], 2, "http://model-candidate:8000/predict")
+    payload = json.dumps(
+        {
+            "request_id": "req-1",
+            "features": [1.0],
+            "champion_pred": 2,
+            "candidate_url": "http://model-candidate:8000/predict",
+        }
+    )
+    assert queue.publish_shadow_task("req-1", payload)
     channel = connection.channel.return_value
     channel.confirm_delivery.assert_called_once()
     args = channel.basic_publish.call_args.kwargs
@@ -204,9 +184,7 @@ def test_publisher_contract_and_broker_failure(monkeypatch):
     }
     connection.__exit__.assert_called_once()
     channel.basic_publish.side_effect = pika.exceptions.UnroutableError([])
-    assert (
-        queue.publish_shadow_task("req-1", [1.0], 2, "http://model-candidate:8000/predict") is False
-    )
+    assert queue.publish_shadow_task("req-1", payload) is False
 
 
 def test_existing_duplicate_feedback_counts_first_label_without_backfill(database):
@@ -271,8 +249,6 @@ def test_publisher_authentication_error_does_not_log_credentials(monkeypatch, ca
         "BlockingConnection",
         Mock(side_effect=pika.exceptions.ProbableAuthenticationError(secret)),
     )
-    assert (
-        queue.publish_shadow_task("req-1", [1.0], 1, "http://model-candidate:8000/predict") is False
-    )
+    assert queue.publish_shadow_task("req-1", "{}") is False
     assert "ProbableAuthenticationError" in caplog.text
     assert secret not in caplog.text

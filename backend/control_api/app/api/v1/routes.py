@@ -1,10 +1,10 @@
 import json
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app.db.models import AuditEvent, Prediction, Rollout
+from app.db.models import AuditEvent, Prediction, Rollout, ShadowOutbox
 from app.db.session import get_db
 from app.schemas.schemas import (
     AdvanceRolloutRequest,
@@ -18,7 +18,6 @@ from app.schemas.schemas import (
 )
 from app.services.decision_engine import evaluate_rollout, execute_advance, execute_rollback
 from app.services.feedback import accuracy_summary
-from app.services.queue import publish_shadow_task
 from app.services.routing import CANDIDATE_URL, determine_serving_role, forward_prediction
 
 router = APIRouter()
@@ -41,9 +40,7 @@ def get_or_create_active_rollout(db: Session) -> Rollout:
 
 
 @router.post("/predict", response_model=PredictionResponse)
-async def predict(
-    request: PredictionRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)
-):
+async def predict(request: PredictionRequest, db: Session = Depends(get_db)):
     """
     Routes an incoming prediction request deterministically to Champion or Candidate.
     Records the prediction, latency, and chosen version in PostgreSQL for auditing.
@@ -67,12 +64,15 @@ async def predict(
         status_code=200,
     )
     db.add(db_pred)
-    db.commit()
-
     if shadow_enabled:
-        background_tasks.add_task(
-            publish_shadow_task, pred_id, request.features, result["prediction"], CANDIDATE_URL
-        )
+        db.flush()  # Insert the parent before its outbox FK, without committing.
+        db.add(ShadowOutbox(prediction_id=pred_id, payload_json=json.dumps({
+            "request_id": pred_id,
+            "features": request.features,
+            "champion_pred": result["prediction"],
+            "candidate_url": CANDIDATE_URL,
+        }, allow_nan=False)))
+    db.commit()
 
     return PredictionResponse(
         prediction=result["prediction"],

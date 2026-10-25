@@ -1,6 +1,5 @@
-"""Blocking publisher; call from a background task, never on the response path."""
+"""Confirmed publisher for persisted outbox payloads; never called by prediction routes."""
 
-import json
 import logging
 import os
 
@@ -10,16 +9,15 @@ logger = logging.getLogger(__name__)
 QUEUE_NAME = "shadow_tasks"
 
 
-def publish_shadow_task(
-    request_id: str, features: list[float], champion_pred: int, candidate_url: str
-) -> bool:
-    """Publish a persistent task with broker confirmation, without failing inference."""
+def publish_shadow_task(request_id: str, payload_json: str) -> bool:
+    """Return true only after RabbitMQ confirms the persistent, routable event."""
     try:
         parameters = pika.URLParameters(os.getenv("RABBITMQ_URL", "amqp://rabbitmq:5672/"))
         parameters.socket_timeout = 3
         parameters.stack_timeout = 5
         parameters.blocked_connection_timeout = 5
         parameters.connection_attempts = 1
+        parameters.heartbeat = 10
         with pika.BlockingConnection(parameters) as connection:
             channel = connection.channel()
             channel.queue_declare(queue=QUEUE_NAME, durable=True)
@@ -27,15 +25,7 @@ def publish_shadow_task(
             channel.basic_publish(
                 exchange="",
                 routing_key=QUEUE_NAME,
-                body=json.dumps(
-                    {
-                        "request_id": request_id,
-                        "features": features,
-                        "champion_pred": champion_pred,
-                        "candidate_url": candidate_url,
-                    },
-                    allow_nan=False,
-                ).encode(),
+                body=payload_json,
                 properties=pika.BasicProperties(
                     content_type="application/json", delivery_mode=2, message_id=request_id
                 ),

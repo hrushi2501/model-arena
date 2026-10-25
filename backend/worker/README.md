@@ -10,6 +10,8 @@ Each successful task commits a `model_comparisons` row containing `prediction_id
 A conditional insert verifies the persisted Champion prediction, and PostgreSQL
 `ON CONFLICT` prevents duplicates. Completed tasks are acknowledged without calling
 the Candidate again, including redelivery after a commit followed by a lost ACK.
+The API's durable outbox may also replay a task after a dispatcher crash; the same
+prediction ID provides duplicate protection in both cases.
 Accuracy counters are derived by the API from saved comparisons and feedback;
 the worker does not maintain a second copy. The API owns schema creation and the
 worker waits for its tables before consuming.
