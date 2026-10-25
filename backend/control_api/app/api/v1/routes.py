@@ -55,7 +55,10 @@ async def predict(request: PredictionRequest, db: Session = Depends(get_db)):
         role, target_url = determine_serving_role(request.client_id, rollout)
     selected_version = rollout.candidate_version if role == "candidate" else rollout.champion_version
 
-    result = await forward_prediction(role, target_url, request.features, selected_version, inject_fault=request.inject_fault)
+    try:
+        result = await forward_prediction(role, target_url, request.features, selected_version, inject_fault=request.inject_fault)
+    except TypeError:
+        result = await forward_prediction(role, target_url, request.features, selected_version)
 
     pred_id = str(uuid.uuid4())
     status_code = result.get("status_code", 200)
@@ -166,6 +169,55 @@ def reset_rollout(db: Session = Depends(get_db)):
         canary_percentage=rollout.canary_percentage,
         updated_at=rollout.updated_at,
     )
+
+
+@router.post("/rollouts/shadow", response_model=RolloutStatusResponse)
+def enable_shadow_mode(db: Session = Depends(get_db)):
+    """Enables shadow testing mode (0% candidate traffic, 100% champion, background shadow replication via RabbitMQ)."""
+    rollout = get_or_create_active_rollout(db)
+    rollout.state = "SHADOW"
+    rollout.canary_percentage = 0.0
+    audit = AuditEvent(
+        event_type="STAGE_CHANGE",
+        reason="Enabled 100% Shadow Testing mode (asynchronous background replay via RabbitMQ).",
+        details_json=json.dumps({"state": "SHADOW", "canary_percentage": 0.0}),
+    )
+    db.add(audit)
+    db.commit()
+    db.refresh(rollout)
+    CANARY_PERCENTAGE.set(0.0)
+    return RolloutStatusResponse(
+        id=rollout.id,
+        champion_version=rollout.champion_version,
+        candidate_version=rollout.candidate_version,
+        state=rollout.state,
+        canary_percentage=rollout.canary_percentage,
+        updated_at=rollout.updated_at,
+    )
+
+
+@router.get("/shadow/summary")
+def get_shadow_summary(db: Session = Depends(get_db)):
+    """Returns shadow testing comparison statistics between Champion and Candidate."""
+    comps = db.query(ModelComparison).all()
+    total = len(comps)
+    matches = sum(1 for c in comps if c.is_match)
+    agreement_rate = (matches / total) if total > 0 else 0.0
+    return {
+        "total_shadow_evaluations": total,
+        "matching_predictions": matches,
+        "divergent_predictions": total - matches,
+        "agreement_rate": round(agreement_rate, 4),
+        "recent_comparisons": [
+            {
+                "prediction_id": c.prediction_id,
+                "champion_pred": c.champion_pred,
+                "candidate_pred": c.candidate_pred,
+                "is_match": c.is_match,
+            }
+            for c in comps[-15:]
+        ],
+    }
 
 
 @router.post("/rollouts/evaluate", response_model=EvaluateResponse)
