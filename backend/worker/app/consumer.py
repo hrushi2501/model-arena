@@ -6,7 +6,9 @@ import pika
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("worker")
 
-RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://rabbitmq:5672/")
+RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "rabbitmq")
+RABBITMQ_USER = os.getenv("RABBITMQ_USER", "model_arena")
+RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD", "")
 QUEUE_NAME = "shadow_tasks"
 
 
@@ -24,7 +26,8 @@ def process_shadow_task(ch, method, properties, body):
 def main():
     logger.info("Connecting to RabbitMQ...")
     try:
-        parameters = pika.URLParameters(RABBITMQ_URL)
+        credentials = pika.PlainCredentials(RABBITMQ_USER, RABBITMQ_PASSWORD) if RABBITMQ_PASSWORD else None
+        parameters = pika.ConnectionParameters(host=RABBITMQ_HOST, port=5672, credentials=credentials)
         connection = pika.BlockingConnection(parameters)
         channel = connection.channel()
         channel.queue_declare(queue=QUEUE_NAME, durable=True)
