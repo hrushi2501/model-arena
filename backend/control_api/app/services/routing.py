@@ -30,13 +30,13 @@ def determine_serving_role(client_id: str | None, rollout: Rollout) -> tuple[str
     return "champion", CHAMPION_URL
 
 
-async def forward_prediction(role: str, target_url: str, features: list[float], model_version: str) -> dict:
+async def forward_prediction(role: str, target_url: str, features: list[float], model_version: str, inject_fault: bool = False) -> dict:
     """
     Forwards prediction payload to the selected model server container.
-    Provides graceful fallback for testing when containers are starting.
+    Supports fault injection and provides graceful fallback for testing.
     """
     start_time = time.time()
-    payload = {"features": features}
+    payload = {"features": features, "inject_fault": inject_fault}
 
     try:
         async with httpx.AsyncClient(timeout=2.0) as client:
@@ -46,9 +46,18 @@ async def forward_prediction(role: str, target_url: str, features: list[float], 
                 data = response.json()
                 data["latency_ms"] = round(latency_ms, 2)
                 data["model_role"] = role
+                data["status_code"] = 200
                 return data
             else:
                 logger.warning(f"Model server {target_url} returned status {response.status_code}")
+                return {
+                    "prediction": 0,
+                    "probabilities": [0.0, 0.0, 0.0],
+                    "model_version": model_version,
+                    "model_role": role,
+                    "latency_ms": round(latency_ms, 2),
+                    "status_code": response.status_code,
+                }
     except Exception as e:
         logger.info(f"Connecting to {target_url} failed ({e}); using local fallback.")
 
@@ -61,4 +70,5 @@ async def forward_prediction(role: str, target_url: str, features: list[float], 
         "model_version": model_version,
         "model_role": role,
         "latency_ms": round(max(latency_ms, 2.5), 2),
+        "status_code": 200,
     }

@@ -4,45 +4,63 @@ import { useEffect, useState, useCallback } from "react";
 import {
   checkApiHealth,
   getActiveRollout,
-  advanceRollout,
-  rollbackRollout,
   getAuditEvents,
+  getRecentPredictions,
 } from "@/lib/api";
-import { RolloutInfo, AuditEvent } from "@/lib/types";
+import { RolloutInfo, AuditEvent, RecentPrediction } from "@/lib/types";
 
 const STANDBY_ROLLOUT: RolloutInfo = {
-  id: "rollout-default",
-  champion_version: "wine-classifier:1",
-  candidate_version: "wine-classifier:2",
+  id: "1",
+  champion_version: "models:/wine-classifier/1",
+  candidate_version: "models:/wine-classifier/2",
   state: "READY",
   canary_percentage: 0.0,
   updated_at: "2026-10-25T12:00:00Z",
 };
 
-const SAMPLE_AUDIT: AuditEvent[] = [
-  {
-    id: 1,
-    timestamp: "2026-10-25T12:00:00Z",
-    event_type: "STAGE_CHANGE",
-    reason: "Rollout initialized in READY state",
-    details_json: JSON.stringify({
-      champion: "wine-classifier:1",
-      candidate: "wine-classifier:2",
-    }),
-  },
-];
+function formatISTTime(dateStr: string | null | undefined): string {
+  if (!dateStr) return "Just now";
+
+  // Check if it is a full ISO timestamp
+  const d = new Date(dateStr);
+  if (!isNaN(d.getTime())) {
+    return d.toLocaleTimeString("en-US", {
+      timeZone: "Asia/Kolkata",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+  }
+
+  // Handle bare UTC time strings like "HH:MM:SS"
+  const parts = dateStr.split(":");
+  if (parts.length === 3) {
+    const hours = parseInt(parts[0], 10);
+    const minutes = parseInt(parts[1], 10);
+    const seconds = parseInt(parts[2], 10);
+    if (!isNaN(hours) && !isNaN(minutes) && !isNaN(seconds)) {
+      const now = new Date();
+      const utcDate = new Date(
+        Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hours, minutes, seconds)
+      );
+      return utcDate.toLocaleTimeString("en-US", {
+        timeZone: "Asia/Kolkata",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      });
+    }
+  }
+
+  return dateStr;
+}
 
 export default function OperatorControlPage() {
   const [mounted, setMounted] = useState<boolean>(false);
   const [isOnline, setIsOnline] = useState<boolean | null>(null);
   const [rollout, setRollout] = useState<RolloutInfo>(STANDBY_ROLLOUT);
-  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>(SAMPLE_AUDIT);
-  const [loadingAction, setLoadingAction] = useState<string | null>(null);
-  const [actionFeedback, setActionFeedback] = useState<{
-    text: string;
-    isError: boolean;
-  } | null>(null);
-  const [autoRefresh, setAutoRefresh] = useState<boolean>(true);
+  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
+  const [recentPredictions, setRecentPredictions] = useState<RecentPrediction[]>([]);
 
   useEffect(() => {
     setMounted(true);
@@ -58,46 +76,24 @@ export default function OperatorControlPage() {
         setRollout(active);
       }
       const audits = await getAuditEvents();
-      if (audits && audits.length > 0) {
+      if (audits) {
         setAuditEvents(audits);
+      }
+      const preds = await getRecentPredictions();
+      if (preds) {
+        setRecentPredictions(preds);
       }
     }
   }, []);
 
+  // Silent live auto-refresh every 3 seconds
   useEffect(() => {
     fetchData();
-    if (!autoRefresh) return;
-
     const interval = setInterval(() => {
       fetchData();
-    }, 4000);
-
+    }, 3000);
     return () => clearInterval(interval);
-  }, [fetchData, autoRefresh]);
-
-  const handleAdvance = async () => {
-    setLoadingAction("advance");
-    setActionFeedback(null);
-    const result = await advanceRollout();
-    setLoadingAction(null);
-    setActionFeedback({
-      text: result.message,
-      isError: !result.success,
-    });
-    fetchData();
-  };
-
-  const handleRollback = async () => {
-    setLoadingAction("rollback");
-    setActionFeedback(null);
-    const result = await rollbackRollout("Manual operator intervention");
-    setLoadingAction(null);
-    setActionFeedback({
-      text: result.message,
-      isError: !result.success,
-    });
-    fetchData();
-  };
+  }, [fetchData]);
 
   const championPct = Math.round((1 - rollout.canary_percentage) * 100);
   const candidatePct = Math.round(rollout.canary_percentage * 100);
@@ -123,10 +119,13 @@ export default function OperatorControlPage() {
 
   return (
     <div className="page-container">
-      {/* Top Navigation */}
+      {/* Clean Top Navigation */}
       <nav className="navbar">
         <div className="nav-brand">
-          <span>Model Arena</span>
+          <span style={{ fontSize: "16px", fontWeight: 700 }}>Model Arena</span>
+          <span style={{ color: "var(--text-dim)", fontWeight: 400, fontSize: "13px" }}>
+            Safe Live Release Operations
+          </span>
         </div>
 
         <div className="nav-links">
@@ -154,102 +153,64 @@ export default function OperatorControlPage() {
           >
             MLflow
           </a>
-          <span className="nav-brand-tag">LOCAL</span>
         </div>
       </nav>
 
-      {/* Status Bar */}
-      <div className="header-strip">
-        <div className="system-status">
-          <span
-            className={`status-dot ${
-              isOnline ? "status-dot-active" : "status-dot-standby"
-            }`}
-          />
-          <span>
-            Control Gateway:{" "}
-            <strong style={{ color: "var(--text-main)" }}>
-              {isOnline === null
-                ? "Connecting..."
-                : isOnline
-                ? "Active (http://localhost:8080)"
-                : "Standby / Offline"}
-            </strong>
-          </span>
-        </div>
-
-        <div className="header-tools">
-          <label className="checkbox-label">
-            <input
-              type="checkbox"
-              checked={autoRefresh}
-              onChange={(e) => setAutoRefresh(e.target.checked)}
-            />
-            <span>Auto-poll (4s)</span>
-          </label>
-          <button
-            onClick={() => fetchData()}
-            className="btn btn-subtle"
-            style={{ padding: "3px 8px", fontSize: "11px" }}
-          >
-            Refresh
-          </button>
-        </div>
-      </div>
-
-      {/* Layout Split: Overview & Controls */}
-      <div className="layout-split">
-        {/* Left Panel: Active Rollout & Models */}
+      {/* Top Grid: Active Rollout & Decision Engine Rules */}
+      <div className="layout-split" style={{ gridTemplateColumns: "1.3fr 1fr", gap: "20px", marginBottom: "24px" }}>
+        {/* Left: Active Rollout & Models */}
         <section className="panel">
           <div className="panel-header">
             <div>
               <h2 className="panel-title">Active Release Rollout</h2>
               <span
                 className="mono-cell"
-                style={{ fontSize: "11px" }}
+                style={{ fontSize: "11px", color: "var(--text-muted)" }}
                 suppressHydrationWarning
               >
-                ID: {String(rollout.id)} • Last checked:{" "}
-                {mounted && rollout.updated_at
-                  ? new Date(rollout.updated_at).toLocaleTimeString()
-                  : "Standby"}
+                Rollout ID: {String(rollout.id)} • Updated:{" "}
+                {mounted ? formatISTTime(rollout.updated_at) : "Active"}
               </span>
             </div>
             <div>{getStatusBadge(rollout.state)}</div>
           </div>
 
           <div className="panel-body">
-            {/* Model Comparison Grid */}
+            {/* Model Comparison Cards */}
             <div className="model-spec-grid">
               {/* Champion Card */}
               <div className="model-spec-box">
-                <div className="model-role-caption">Champion Role</div>
+                <div className="model-role-caption" style={{ color: "#6B46C1" }}>
+                  ● Champion (Baseline)
+                </div>
                 <div className="model-heading">RandomForestClassifier</div>
                 <div className="model-version-code">
                   URI: {rollout.champion_version}
                 </div>
                 <div className="model-weight">
-                  <span>Current share</span>
-                  <strong>{championPct}%</strong>
+                  <span>Production Share</span>
+                  <strong style={{ fontSize: "16px", color: "#6B46C1" }}>{championPct}%</strong>
                 </div>
               </div>
 
               {/* Candidate Card */}
               <div className="model-spec-box">
-                <div className="model-role-caption">Candidate Role</div>
+                <div className="model-role-caption" style={{ color: "#2E7D32" }}>
+                  ● Candidate (Canary)
+                </div>
                 <div className="model-heading">GradientBoostingClassifier</div>
                 <div className="model-version-code">
                   URI: {rollout.candidate_version}
                 </div>
                 <div className="model-weight">
-                  <span>Current share</span>
-                  <strong>{candidatePct}%</strong>
+                  <span>Production Share</span>
+                  <strong style={{ fontSize: "16px", color: "#2E7D32" }}>{candidatePct}%</strong>
                 </div>
               </div>
             </div>
 
-            {/* Linear Split Track */}
-            <div className="traffic-track-container">
+            {/* Traffic Split Track */}
+            <div className="traffic-track-container" style={{ marginTop: "16px" }}>
               <div className="traffic-track-header">
                 <span>Champion ({championPct}%)</span>
                 <span>Candidate ({candidatePct}%)</span>
@@ -268,87 +229,126 @@ export default function OperatorControlPage() {
           </div>
         </section>
 
-        {/* Right Panel: Manual Operator Actions */}
+        {/* Right: Automated Safety Rules & Explanations */}
         <section className="panel">
           <div className="panel-header">
-            <h2 className="panel-title">Release Controls</h2>
-            <span className="mono-cell" style={{ fontSize: "11px" }}>
-              Manual Override
+            <h2 className="panel-title">Decision Engine Guardrails</h2>
+            <span className="mono-cell" style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+              Safety Thresholds
             </span>
           </div>
 
           <div className="panel-body">
-            <div className="action-stack">
-              <button
-                onClick={handleAdvance}
-                disabled={loadingAction !== null || rollout.state === "PROMOTED"}
-                className="btn btn-primary"
-              >
-                {loadingAction === "advance"
-                  ? "Advancing..."
-                  : rollout.state === "READY"
-                  ? "Start Shadow Testing"
-                  : rollout.state === "SHADOW"
-                  ? "Begin Canary (10%)"
-                  : rollout.state === "CANARY" && candidatePct < 50
-                  ? "Advance Canary (50%)"
-                  : rollout.state === "CANARY"
-                  ? "Promote Candidate (100%)"
-                  : "Advance Rollout"}
-              </button>
-
-              <button
-                onClick={handleRollback}
-                disabled={
-                  loadingAction !== null || rollout.state === "ROLLED_BACK"
-                }
-                className="btn btn-danger"
-              >
-                {loadingAction === "rollback"
-                  ? "Executing rollback..."
-                  : "Trigger Emergency Rollback"}
-              </button>
-
-              {actionFeedback && (
-                <div
-                  className={`feedback-box ${
-                    actionFeedback.isError ? "feedback-err" : "feedback-ok"
-                  }`}
-                >
-                  {actionFeedback.text}
-                </div>
-              )}
-            </div>
-
-            <div className="policy-box">
-              <div className="policy-box-title">Automated Safety Rules</div>
-              <ul className="policy-list">
-                <li>Rollback if HTTP error rate exceeds 5%</li>
-                <li>Rollback if p95 latency exceeds 200ms</li>
-                <li>Promotion requires minimum 20 evaluation requests</li>
-              </ul>
-            </div>
+            <ul style={{ paddingLeft: "18px", margin: 0, display: "flex", flexDirection: "column", gap: "10px", fontSize: "12px", lineHeight: "1.5", color: "var(--text-main)" }}>
+              <li>
+                <strong>Error Rate:</strong> Automatically roll back to Champion if Candidate HTTP error rate exceeds 5%.
+              </li>
+              <li>
+                <strong>P95 Latency:</strong> Automatically roll back if 95% of requests take longer than 200ms.
+              </li>
+              <li>
+                <strong>Model Accuracy:</strong> Automatically roll back if Candidate accuracy drops by more than 5% compared to Champion.
+              </li>
+              <li>
+                <strong>Minimum Requests:</strong> Require at least 20 evaluation requests before advancing traffic or promoting.
+              </li>
+            </ul>
           </div>
         </section>
       </div>
+
+      {/* Live User Requests Table */}
+      <section className="panel" style={{ marginBottom: "24px" }}>
+        <div className="panel-header">
+          <div>
+            <h2 className="panel-title">Live User Requests &amp; Routing</h2>
+            <span className="mono-cell" style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+              Real-time traffic showing model routing for each client
+            </span>
+          </div>
+          <span className="mono-cell" style={{ fontSize: "11px" }}>
+            {recentPredictions.length} requests recorded
+          </span>
+        </div>
+
+        <div className="table-container" style={{ maxHeight: "380px", overflowY: "auto" }}>
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th style={{ width: "100px" }}>Time</th>
+                <th style={{ width: "180px" }}>Client ID</th>
+                <th style={{ width: "150px" }}>Routed Model</th>
+                <th style={{ width: "220px" }}>Model Version</th>
+                <th style={{ width: "110px" }}>Predicted</th>
+                <th style={{ width: "120px" }}>Latency</th>
+              </tr>
+            </thead>
+            <tbody>
+              {recentPredictions.length === 0 ? (
+                <tr>
+                  <td colSpan={6} style={{ textAlign: "center", padding: "20px", color: "var(--text-dim)" }}>
+                    No predictions recorded yet. Run a demo script to see live user traffic appear here.
+                  </td>
+                </tr>
+              ) : (
+                recentPredictions.map((req) => (
+                  <tr key={req.id}>
+                    <td className="mono-cell" suppressHydrationWarning style={{ fontSize: "11px" }}>
+                      {mounted ? formatISTTime(req.created_at) : "Just now"}
+                    </td>
+                    <td className="mono-cell" style={{ fontWeight: 600 }}>
+                      {req.client_id}
+                    </td>
+                    <td>
+                      <span
+                        style={{
+                          display: "inline-block",
+                          padding: "2px 8px",
+                          borderRadius: "4px",
+                          fontSize: "11px",
+                          fontWeight: 600,
+                          backgroundColor: req.selected_role === "candidate" ? "#E8F5E9" : "#F3E8FF",
+                          color: req.selected_role === "candidate" ? "#2E7D32" : "#6B46C1",
+                          border: `1px solid ${req.selected_role === "candidate" ? "#A5D6A7" : "#D8B4FE"}`,
+                        }}
+                      >
+                        {req.selected_role === "candidate" ? "Candidate" : "Champion"}
+                      </span>
+                    </td>
+                    <td className="mono-cell" style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+                      {req.selected_version}
+                    </td>
+                    <td style={{ fontWeight: 600 }}>
+                      Class {req.prediction}
+                    </td>
+                    <td className="mono-cell" style={{ fontSize: "11px" }}>
+                      {req.latency_ms} ms
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
 
       {/* Audit Log Table */}
       <section className="panel">
         <div className="panel-header">
           <div>
             <h2 className="panel-title">Audit Trail &amp; Release Decisions</h2>
-            <span className="mono-cell" style={{ fontSize: "11px" }}>
-              Synchronized events from /api/v1/audit
+            <span className="mono-cell" style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+              Append-only compliance log from /api/v1/audit
             </span>
           </div>
-          <span className="mono-cell">{auditEvents.length} records</span>
+          <span className="mono-cell" style={{ fontSize: "11px" }}>{auditEvents.length} records</span>
         </div>
 
         <div className="table-container">
           <table className="data-table">
             <thead>
               <tr>
-                <th style={{ width: "130px" }}>Timestamp</th>
+                <th style={{ width: "120px" }}>Timestamp</th>
                 <th style={{ width: "120px" }}>Event</th>
                 <th>Reason</th>
                 <th>Details</th>
@@ -357,24 +357,20 @@ export default function OperatorControlPage() {
             <tbody>
               {auditEvents.map((evt) => (
                 <tr key={evt.id}>
-                  <td className="mono-cell" suppressHydrationWarning>
-                    {mounted
-                      ? new Date(evt.timestamp).toLocaleTimeString([], {
-                          hour: "2-digit",
-                          minute: "2-digit",
-                          second: "2-digit",
-                        })
-                      : "12:00:00"}
+                  <td className="mono-cell" suppressHydrationWarning style={{ fontSize: "11px" }}>
+                    {mounted ? formatISTTime(evt.timestamp) : "12:00:00"}
                   </td>
                   <td>{getEventBadge(evt.event_type)}</td>
-                  <td>{evt.reason}</td>
+                  <td style={{ fontWeight: 500 }}>{evt.reason}</td>
                   <td
                     className="mono-cell"
                     style={{
-                      maxWidth: "360px",
+                      maxWidth: "340px",
                       overflow: "hidden",
                       textOverflow: "ellipsis",
                       whiteSpace: "nowrap",
+                      fontSize: "11px",
+                      color: "var(--text-muted)",
                     }}
                   >
                     {typeof evt.details_json === "string"
@@ -387,12 +383,6 @@ export default function OperatorControlPage() {
           </table>
         </div>
       </section>
-
-      {/* Sober Footer */}
-      <footer className="footer">
-        <span>Model Arena • Safe Live Release System</span>
-        <span>Metrics scraped via Prometheus :9090 • Provisioned in Grafana :3001</span>
-      </footer>
     </div>
   );
 }

@@ -28,3 +28,14 @@ export interface AuditEvent {
   reason: string;
   details_json?: string;
 }
+
+export interface RecentPrediction {
+  id: string;
+  client_id: string;
+  selected_role: "champion" | "candidate";
+  selected_version: string;
+  prediction: number;
+  latency_ms: number;
+  status_code: number;
+  created_at: string;
+}

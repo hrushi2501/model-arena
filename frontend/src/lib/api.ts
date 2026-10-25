@@ -85,3 +85,19 @@ export async function getAuditEvents(): Promise<AuditEvent[]> {
     return [];
   }
 }
+
+export async function getRecentPredictions(): Promise<import("./types").RecentPrediction[]> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/v1/predictions/recent`, {
+      method: "GET",
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    });
+    if (!res.ok) {
+      return [];
+    }
+    return await res.json();
+  } catch {
+    return [];
+  }
+}

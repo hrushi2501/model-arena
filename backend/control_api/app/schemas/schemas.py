@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, FiniteFloat
 class PredictionRequest(BaseModel):
     features: list[FiniteFloat] = Field(..., description="List of feature values for model inference (e.g. 13 features for Wine)")
     client_id: str | None = Field(None, description="Optional unique client ID for deterministic canary routing")
+    inject_fault: bool = Field(False, description="Simulate an inference failure on the model server")
 
 
 class PredictionResponse(BaseModel):
@@ -16,6 +17,7 @@ class PredictionResponse(BaseModel):
     model_role: str  # champion or candidate
     latency_ms: float
     request_id: str
+    status_code: int = 200
 
 
 class RolloutStatusResponse(BaseModel):

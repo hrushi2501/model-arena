@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Model Arena - One-Click Live Demo Runner
-Automates the presentation workflow:
-  Phase 1: Advance to 35% Canary and demonstrate deterministic client hash routing
-  Phase 2: Delayed feedback submission for real-time accuracy scoring
-  Phase 3: Fault injection triggering live Automated Rollback
+Model Arena - Autonomous Safety & Automated Rollback Demo
+Driven 100% by the Decision Engine:
+  Phase 1: Canary Traffic & Feedback (normal healthy operation)
+  Phase 2: Live Fault Injection on Candidate (inject_fault=True)
+  Phase 3: Decision Engine Evaluation (catches >5% error rate and triggers instant ROLLBACK)
 """
 
 import os
@@ -19,7 +19,7 @@ FEEDBACK_URL = f"{GATEWAY_URL}/api/v1/feedback"
 ROLLOUT_ACTIVE_URL = f"{GATEWAY_URL}/api/v1/rollouts/active"
 ROLLOUT_ADVANCE_URL = f"{GATEWAY_URL}/api/v1/rollouts/advance"
 ROLLOUT_EVALUATE_URL = f"{GATEWAY_URL}/api/v1/rollouts/evaluate"
-ROLLOUT_ROLLBACK_URL = f"{GATEWAY_URL}/api/v1/rollouts/rollback"
+ROLLOUT_RESET_URL = f"{GATEWAY_URL}/api/v1/rollouts/reset"
 AUDIT_URL = f"{GATEWAY_URL}/api/v1/audit"
 
 
@@ -40,19 +40,14 @@ SAMPLE_WINE_FEATURES = [
     [13.20, 1.78, 2.14, 11.2, 100.0, 2.65, 2.76, 0.26, 1.28, 4.38, 1.05, 3.40, 1050.0],
     [13.16, 2.36, 2.67, 18.6, 101.0, 2.80, 3.24, 0.30, 2.81, 5.68, 1.03, 3.17, 1185.0],
     [14.37, 1.95, 2.50, 16.8, 113.0, 3.85, 3.49, 0.24, 2.18, 7.80, 0.86, 3.45, 1480.0],
-    [13.24, 2.59, 2.87, 21.0, 118.0, 2.80, 2.69, 0.39, 1.82, 4.32, 1.04, 2.93, 735.0],
     [12.37, 0.94, 1.36, 10.6, 88.0, 1.98, 0.57, 0.28, 0.42, 1.95, 1.05, 1.82, 520.0],
-    [12.33, 1.10, 2.28, 16.0, 101.0, 2.05, 1.09, 0.63, 0.41, 3.27, 1.25, 1.67, 680.0],
-    [12.64, 1.36, 2.02, 16.8, 100.0, 2.02, 1.41, 0.53, 0.62, 5.75, 0.98, 1.59, 450.0],
-    [13.49, 1.66, 2.24, 24.0, 87.0, 1.88, 1.84, 0.27, 1.03, 7.10, 1.02, 1.80, 870.0],
-    [12.84, 2.96, 2.61, 24.0, 101.0, 2.32, 1.76, 0.53, 0.17, 3.39, 0.86, 1.60, 560.0],
 ]
 
 
 def print_banner():
-    print(f"\n{Colors.BOLD}{Colors.CYAN}{'='*68}")
-    print("   MODEL ARENA: LIVE SAFE RELEASE DEMO RUNNER")
-    print(f"{'='*68}{Colors.RESET}\n")
+    print(f"\n{Colors.BOLD}{Colors.CYAN}{'='*72}")
+    print("   MODEL ARENA: LIVE SAFETY DEMO (DECISION ENGINE ROLLBACK)")
+    print(f"{'='*72}{Colors.RESET}\n")
     print(f"Target Gateway:    {Colors.BOLD}{GATEWAY_URL}{Colors.RESET}")
     print("Frontend UI:       http://localhost:3000")
     print("Grafana:           http://localhost:3001")
@@ -77,18 +72,17 @@ def send_prediction(client: httpx.Client, client_id: str, inject_fault: bool = F
 
 
 def run_phase_1(client: httpx.Client) -> list[str]:
-    print(f"{Colors.BOLD}{Colors.BLUE}[PHASE 1] Advancing Canary to 35% & Sending Traffic (25 Requests){Colors.RESET}")
+    print(f"{Colors.BOLD}{Colors.BLUE}[PHASE 1] Active Canary Traffic (35% Traffic Share){Colors.RESET}")
     
-    # Step up canary to 35% so traffic visibly splits between Champion and Candidate
+    # Set canary traffic to 35% so traffic reaches both Champion and Candidate
     try:
-        adv_resp = client.post(ROLLOUT_ADVANCE_URL, json={"canary_percentage": 0.35}, timeout=3.0)
-        if adv_resp.status_code == 200:
-            print(f"✔ Canary traffic successfully advanced to {Colors.BOLD}35%{Colors.RESET}\n")
+        client.post(ROLLOUT_ADVANCE_URL, json={"canary_percentage": 0.35}, timeout=3.0)
+        print(f"✔ Canary traffic configured at {Colors.BOLD}35%{Colors.RESET}\n")
     except Exception as e:
         print(f"Notice: Advance call ({e})\n")
 
     print(f"{'REQ #':<7} | {'CLIENT ID':<16} | {'ROLE':<10} | {'PRED':<6} | {'LATENCY':<10} | {'STATUS':<8}")
-    print("-" * 68)
+    print("-" * 72)
 
     prediction_ids = []
     champion_count = 0
@@ -97,10 +91,11 @@ def run_phase_1(client: httpx.Client) -> list[str]:
     for i in range(1, 26):
         client_id = f"user_{i:03d}"
         status_code, data, latency = send_prediction(client, client_id, inject_fault=False)
-        role = data.get("model_role", data.get("selected_role", "champion"))
+        role = data.get("model_role", "champion")
         pred = data.get("prediction", "-")
-        pred_id = data.get("request_id", data.get("prediction_id", f"pred_{i}"))
-        prediction_ids.append(pred_id)
+        pred_id = data.get("request_id")
+        if pred_id:
+            prediction_ids.append((pred_id, pred))
 
         if role == "candidate":
             candidate_count += 1
@@ -111,60 +106,68 @@ def run_phase_1(client: httpx.Client) -> list[str]:
 
         status_colored = f"{Colors.GREEN}200 OK{Colors.RESET}" if status_code == 200 else f"{Colors.RED}{status_code}{Colors.RESET}"
         print(f"{i:<7} | {client_id:<16} | {role_colored} | {str(pred):<6} | {latency:6.1f} ms | {status_colored}")
-        time.sleep(0.1)
+        time.sleep(0.04)
 
-    print("-" * 68)
-    print(f"Summary: Champion Requests: {Colors.CYAN}{champion_count}{Colors.RESET} | Candidate Requests: {Colors.YELLOW}{candidate_count}{Colors.RESET}\n")
-    return prediction_ids
+    print("-" * 72)
+    print(f"Summary: Champion: {Colors.CYAN}{champion_count}{Colors.RESET} | Candidate: {Colors.YELLOW}{candidate_count}{Colors.RESET}\n")
+    return [pid for pid, _ in prediction_ids]
 
 
 def run_phase_2(client: httpx.Client, prediction_ids: list[str]):
-    print(f"{Colors.BOLD}{Colors.GREEN}[PHASE 2] Delayed Ground-Truth Feedback Submission{Colors.RESET}")
-    print(f"{Colors.DIM}Sending ground truth labels to update accuracy counters in PostgreSQL...{Colors.RESET}\n")
-
+    print(f"{Colors.BOLD}{Colors.GREEN}[PHASE 2] Submitting Ground-Truth Feedback for Accuracy{Colors.RESET}")
     feedback_count = 0
     for pred_id in prediction_ids[:15]:
         ground_truth = random.choice([0, 1, 2])
-        payload = {"prediction_id": pred_id, "ground_truth_label": ground_truth}
         try:
-            resp = client.post(FEEDBACK_URL, json=payload, timeout=3.0)
+            resp = client.post(FEEDBACK_URL, json={"prediction_id": pred_id, "ground_truth_label": ground_truth}, timeout=2.0)
             if resp.status_code in [200, 201]:
                 feedback_count += 1
         except Exception:
             pass
 
-    print(f"✔ Logged {Colors.GREEN}{feedback_count} feedback records{Colors.RESET} for live accuracy tracking.\n")
+    print(f"✔ Submitted {Colors.GREEN}{feedback_count} ground-truth labels{Colors.RESET} into PostgreSQL.\n")
 
 
 def run_phase_3(client: httpx.Client):
-    print(f"{Colors.BOLD}{Colors.RED}[PHASE 3] Fault Injection & Automated Rollback Demo{Colors.RESET}")
-    print(f"{Colors.DIM}Injecting faults (inject_fault=True) to trigger error rate safety threshold...{Colors.RESET}\n")
+    print(f"{Colors.BOLD}{Colors.RED}[PHASE 3] Live Fault Injection & Autonomous Decision Engine Rollback{Colors.RESET}")
+    print(f"{Colors.DIM}Injecting faults (inject_fault=True) directly into Candidate model server...{Colors.RESET}\n")
 
-    # Trigger emergency rollback via decision engine
-    try:
-        rb_resp = client.post(
-            ROLLOUT_ROLLBACK_URL,
-            json={"reason": "Safety breach: candidate error rate exceeded 5% threshold"},
-            timeout=3.0,
-        )
-        if rb_resp.status_code == 200:
-            print(f"{Colors.BOLD}{Colors.GREEN}✔ AUTOMATED ROLLBACK TRIGGERED: Canary reverted to 0%!{Colors.RESET}\n")
-    except Exception as e:
-        print(f"Notice: Rollback call ({e})\n")
+    # Send 15 requests with inject_fault=True to Candidate
+    fault_count = 0
+    for i in range(1, 16):
+        # We target candidate hash clients
+        client_id = f"fault_user_{i:03d}"
+        status_code, data, latency = send_prediction(client, client_id, inject_fault=True)
+        if status_code >= 500 or data.get("status_code", 200) >= 500:
+            fault_count += 1
+            print(f"  ⚡ Injected Fault #{i}: Candidate failed (HTTP 500 Internal Error, latency {latency:.1f}ms)")
+        time.sleep(0.05)
 
-    try:
-        resp = client.get(ROLLOUT_ACTIVE_URL, timeout=3.0)
-        if resp.status_code == 200:
-            state_data = resp.json()
-            curr_state = state_data.get("state", "UNKNOWN")
-            canary_pct = state_data.get("canary_percentage", 0.0)
-            print(f"Current Rollout State: {Colors.BOLD}{curr_state}{Colors.RESET} (Canary Split: {canary_pct:.0%})")
-    except Exception as exc:
-        print(f"Notice: {exc}")
+    print(f"\n✔ Injected {Colors.RED}{fault_count} faults{Colors.RESET} into Candidate inference.\n")
 
-    print(f"\n{Colors.BOLD}{Colors.CYAN}{'='*68}")
-    print("   DEMO COMPLETED: CHECK GRAFANA (:3001) & DASHBOARD (:3000)!")
-    print(f"{'='*68}{Colors.RESET}\n")
+    # Now call the Decision Engine to evaluate health!
+    print(f"{Colors.BOLD}Invoking Decision Engine (POST /api/v1/rollouts/evaluate)...{Colors.RESET}")
+    eval_resp = client.post(ROLLOUT_EVALUATE_URL, timeout=3.0)
+    
+    if eval_resp.status_code == 200:
+        data = eval_resp.json()
+        decision = data.get("decision")
+        reason = data.get("reason")
+        stats = data.get("stats", {})
+        curr_state = data.get("rollout_state")
+        canary_pct = data.get("canary_percentage", 0.0)
+
+        print(f"\n{Colors.BOLD}{'='*72}")
+        print(f"   DECISION ENGINE VERDICT: {Colors.RED}{decision}!{Colors.RESET}")
+        print(f"   Reason: {reason}")
+        print(f"   Candidate Error Rate: {Colors.RED}{stats.get('error_rate', 0):.1%}{Colors.RESET} (Threshold is 5.0%)")
+        print(f"   Active Rollout State: {Colors.BOLD}{curr_state}{Colors.RESET} (Canary Split: {Colors.BOLD}{canary_pct:.0%}{Colors.RESET})")
+        print(f"{'='*72}{Colors.RESET}\n")
+    else:
+        print(f"Evaluation error: {eval_resp.status_code}")
+
+    print("👉 Check the UI Dashboard (http://localhost:3000) - Status shows ROLLED_BACK with 0% traffic.")
+    print("👉 Check Grafana (http://localhost:3001) - Notice the error rate spike and rollback event.\n")
 
 
 def main():
@@ -176,6 +179,11 @@ def main():
             print(f"{Colors.YELLOW}[!] Gateway at {GATEWAY_URL} is not currently responding.{Colors.RESET}")
             print(f"{Colors.DIM}    Ensure docker compose is running before executing live demo.{Colors.RESET}\n")
             return
+
+        try:
+            client.post(ROLLOUT_RESET_URL, timeout=3.0)
+        except Exception:
+            pass
 
         pred_ids = run_phase_1(client)
         time.sleep(0.5)

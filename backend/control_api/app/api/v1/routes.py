@@ -4,7 +4,7 @@ import uuid
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app.db.models import AuditEvent, Prediction, Rollout, ShadowOutbox
+from app.db.models import AuditEvent, Feedback, ModelComparison, Prediction, Rollout, ShadowOutbox
 from app.db.session import get_db
 from app.schemas.schemas import (
     AdvanceRolloutRequest,
@@ -49,12 +49,16 @@ async def predict(request: PredictionRequest, db: Session = Depends(get_db)):
     """
     rollout = get_or_create_active_rollout(db)
     shadow_enabled = rollout.state == "SHADOW"
-    role, target_url = determine_serving_role(request.client_id, rollout)
+    if request.inject_fault:
+        role, target_url = "candidate", CANDIDATE_URL
+    else:
+        role, target_url = determine_serving_role(request.client_id, rollout)
     selected_version = rollout.candidate_version if role == "candidate" else rollout.champion_version
 
-    result = await forward_prediction(role, target_url, request.features, selected_version)
+    result = await forward_prediction(role, target_url, request.features, selected_version, inject_fault=request.inject_fault)
 
     pred_id = str(uuid.uuid4())
+    status_code = result.get("status_code", 200)
     db_pred = Prediction(
         id=pred_id,
         client_id=request.client_id,
@@ -63,7 +67,7 @@ async def predict(request: PredictionRequest, db: Session = Depends(get_db)):
         prediction=result["prediction"],
         probabilities_json=json.dumps(result.get("probabilities", [])),
         latency_ms=result.get("latency_ms", 1.0),
-        status_code=200,
+        status_code=status_code,
     )
     db.add(db_pred)
     if shadow_enabled:
@@ -89,6 +93,7 @@ async def predict(request: PredictionRequest, db: Session = Depends(get_db)):
         model_role=role,
         latency_ms=result.get("latency_ms", 1.0),
         request_id=pred_id,
+        status_code=status_code,
     )
 
 
@@ -136,6 +141,30 @@ def rollback_rollout(request: RollbackRequest, db: Session = Depends(get_db)):
         state=updated.state,
         canary_percentage=updated.canary_percentage,
         updated_at=updated.updated_at,
+    )
+
+
+@router.post("/rollouts/reset", response_model=RolloutStatusResponse)
+def reset_rollout(db: Session = Depends(get_db)):
+    """Resets the rollout to READY (0% canary) and cleans historical test data for a fresh demo."""
+    db.query(Feedback).delete()
+    db.query(ModelComparison).delete()
+    db.query(ShadowOutbox).delete()
+    db.query(Prediction).delete()
+
+    rollout = get_or_create_active_rollout(db)
+    rollout.state = "READY"
+    rollout.canary_percentage = 0.0
+    db.commit()
+    db.refresh(rollout)
+    CANARY_PERCENTAGE.set(0.0)
+    return RolloutStatusResponse(
+        id=rollout.id,
+        champion_version=rollout.champion_version,
+        candidate_version=rollout.candidate_version,
+        state=rollout.state,
+        canary_percentage=rollout.canary_percentage,
+        updated_at=rollout.updated_at,
     )
 
 
@@ -226,3 +255,22 @@ def get_metrics_summary(db: Session = Depends(get_db)):
         champion_labeled_count=accuracy["champion"]["total"],
         candidate_labeled_count=accuracy["candidate"]["total"],
     )
+
+
+@router.get("/predictions/recent")
+def get_recent_predictions(limit: int = 100, db: Session = Depends(get_db)):
+    """Returns all recent incoming user prediction requests and their routing destination."""
+    preds = db.query(Prediction).order_by(Prediction.created_at.desc()).limit(limit).all()
+    return [
+        {
+            "id": p.id,
+            "client_id": p.client_id or "anonymous",
+            "selected_role": p.selected_role,
+            "selected_version": p.selected_version,
+            "prediction": p.prediction,
+            "latency_ms": round(p.latency_ms, 1),
+            "status_code": p.status_code,
+            "created_at": p.created_at.isoformat() if p.created_at else "",
+        }
+        for p in preds
+    ]
