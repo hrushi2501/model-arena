@@ -1,70 +1,35 @@
 # Model Arena
 
-**Model Arena** is an MLOps platform for safely releasing Machine Learning models using **Shadow Testing**, **Canary Rollouts**, and **Automatic Rollback**.
+**Model Arena** is a class MVP for safer machine-learning releases using shadow testing, canary traffic, and automatic rollback.
 
----
+See [`PLAN.md`](PLAN.md) for the architecture, full model lifecycle, service responsibilities, rollout policy, deployment plan, and implementation milestones.
 
-## Architecture Overview
+Use [`checklist.md`](checklist.md) for phased tasks, four development lanes, dependencies and acceptance gates. Read [`progress.md`](progress.md) for the current implementation status, verified evidence, blockers and ownership. Developers and agents update progress with each meaningful change.
 
-```text
-[ Next.js UI (:3000) ] ──► [ Nginx (:8080) ] ──► [ FastAPI Control API (:8000) ]
-                                                        │              │
-                                                        ▼              ▼
-                                                [ Model Serving ]  [ RabbitMQ ]
-                                               (Champion/Candidate)    │
-                                                        ▲              ▼
-                                                        │         [ Worker ]
-                                                [ MLflow / DB ]
-```
+## Agent guidance
 
-- **Frontend (`frontend/`):** Next.js & Bun operator control panel for managing rollouts and observing decisions.
-- **Control API (`backend/control_api/`):** FastAPI prediction gateway that deterministically splits canary traffic and coordinates release decisions.
-- **Model Serving (`backend/model_serving/`):** Version-pinned container loading models from the MLflow registry.
-- **Worker (`backend/worker/`):** RabbitMQ consumer handling asynchronous shadow comparisons and delayed ground-truth feedback.
-- **ML Pipeline (`backend/ml/`):** DVC reproducible pipeline training Scikit-learn models on the Wine classification dataset.
-- **Infrastructure (`infra/`):** Docker Compose orchestration with PostgreSQL, RabbitMQ, MLflow (SQLite store), Prometheus, and Grafana.
+Repository-level instructions live in [`AGENTS.md`](AGENTS.md); coding agents should read it before making changes. The project skills in [`.github/agentskills/`](.github/agentskills/) cover frontend UI, minimal complete implementation (Ponytail), backend/MLOps, observability, and repository security. Claude Code, GitHub Copilot, and Cursor entrypoint files point back to the same guidance.
 
----
+## Repository areas
 
-## Rollout Policy & Rules
+- `frontend/`: Next.js, TypeScript, Bun, and Biome control panel; deployed separately to Vercel.
+- `backend/control_api/`: FastAPI prediction gateway and rollout control API.
+- `backend/model_serving/`: one version-pinned model server image, run once per active model version.
+- `backend/worker/`: planned RabbitMQ consumer for shadow comparisons and delayed labels.
+- `backend/ml/`: DVC pipeline and MLflow experiment/model registration workflow.
+- `database/`: migration and seed-data ownership.
+- `infra/`: local proxy and monitoring configuration.
+- `compose.yaml`: local multi-container stack (to be completed as services are implemented).
 
-Release decisions follow 3 deterministic rules (documented in [`docs/rollout-policy.md`](docs/rollout-policy.md)):
-1. **HOLD:** When fewer than 20 requests or feedback samples have been collected.
-2. **ROLLBACK:** Triggered automatically if error rate > 5%, p95 latency > 200ms, or candidate accuracy drops > 5% below champion.
-3. **PROMOTE:** When sample thresholds are met, latency and error rates are healthy, and candidate accuracy meets or exceeds champion.
+## Local setup
 
----
+1. Install Bun, Python 3.12, Docker, and Docker Compose.
+2. Copy `.env.example` to `.env` and replace the local database password.
+3. Run `bun install` from the repository root, then `bun run dev` for the frontend.
+4. Run `make stack` for the API and core infrastructure. Run `make stack-full` to also start the model-server and observability profiles.
 
-## Local Quickstart
-
-### Prerequisites
-- **Docker & Docker Compose**
-- **Bun** (for the Next.js frontend)
-- **Python 3.12** (managed with `uv`)
-
-### 1. Environment Setup
-```bash
-cp .env.example .env
-# Edit .env with your desired passwords if needed
-```
-
-### 2. Start Backend & Infrastructure
-```bash
-# Start all core services, model servers, and observability tools
-make stack-full
-# Or via docker compose directly:
-docker compose --profile serving --profile observability up --build -d
-```
-
-### 3. Start Frontend Dashboard
-```bash
-bun install
-bun run dev
-```
-Open [http://localhost:3000](http://localhost:3000) to view the control panel.
-
----
+The current frontend is a static starter screen. The API and model server expose liveness routes only. Training stages, inference, persistence, queue processing, canary decisions, Prometheus scraping, and the worker remain to be implemented.
 
 ## Security
 
-Secret scanning is automated via GitHub Actions with GitGuardian. See [`SECURITY.md`](SECURITY.md). Never commit real credentials or `.env` files.
+See [`SECURITY.md`](SECURITY.md) for GitGuardian scanning setup. Never commit `.env` or real credentials.

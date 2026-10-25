@@ -5,6 +5,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "lint": "biome check src",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

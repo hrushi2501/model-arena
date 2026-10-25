@@ -11,6 +11,7 @@ services:
       - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
@@ -43,13 +44,16 @@ services:
       - --port
       - "5000"
       - --backend-store-uri
-      - sqlite:////mlartifacts/mlflow.db
+      - postgresql+psycopg://${POSTGRES_USER:-model_arena}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/mlflow
       - --artifacts-destination
       - /mlartifacts
     ports:
       - "127.0.0.1:5000:5000"
     volumes:
       - mlflow_artifacts:/mlartifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   control-api:
     build:
@@ -73,20 +77,6 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
-
-  worker:
-    build:
-      context: ./backend/worker
-      dockerfile: Dockerfile
-    environment:
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-model_arena}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-model_arena}
-      RABBITMQ_URL: amqp://${RABBITMQ_USER:-model_arena}:${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}@rabbitmq:5672/
-      CANDIDATE_URL: http://model-candidate:8000
-    depends_on:
-      postgres:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
 
   model-champion:
     build:
