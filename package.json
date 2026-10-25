@@ -8,11 +8,6 @@
   "scripts": {
     "dev": "bun --filter @model-arena/web dev",
     "build": "bun --filter @model-arena/web build",
-    "lint": "biome check .",
-    "format": "biome format --write .",
     "typecheck": "bun --filter @model-arena/web typecheck"
-  },
-  "devDependencies": {
-    "@biomejs/biome": "^2.6.0"
   }
 }
