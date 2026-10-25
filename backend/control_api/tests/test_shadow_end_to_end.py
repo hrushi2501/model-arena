@@ -13,13 +13,14 @@ from uuid import uuid4
 import pika
 import pytest
 
-from app.db.models import AccuracyCounter, ModelComparison, Prediction
+from app.db.models import ModelComparison, Prediction
 from app.schemas.schemas import FeedbackRequest
-from app.services.feedback import record_feedback
+from app.services.feedback import accuracy_summary, record_feedback
 from app.services.queue import publish_shadow_task
 
 
-def test_broker_worker_database_and_delayed_feedback(postgres, monkeypatch):
+@pytest.mark.parametrize("candidate_failures", [0, 1])
+def test_broker_worker_database_and_delayed_feedback(postgres, monkeypatch, candidate_failures):
     rabbit_url = os.getenv("TEST_RABBITMQ_URL")
     if not rabbit_url:
         pytest.skip("Set TEST_RABBITMQ_URL to an isolated RabbitMQ virtual host")
@@ -30,7 +31,7 @@ def test_broker_worker_database_and_delayed_feedback(postgres, monkeypatch):
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             requests.append((self.path, body))
-            self.send_response(200)
+            self.send_response(503 if len(requests) <= candidate_failures else 200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(b'{"prediction": 0}')
@@ -92,10 +93,6 @@ def test_broker_worker_database_and_delayed_feedback(postgres, monkeypatch):
             pytest.fail("Worker did not persist the candidate prediction")
         # Redeliver the same task to exercise idempotency through a real broker.
         assert publish_shadow_task(prediction_id, [1.0, 2.0], 1, candidate_url)
-        deadline = time.monotonic() + 10
-        while len(requests) < 2 and time.monotonic() < deadline:
-            time.sleep(0.05)
-        assert len(requests) == 2
 
         # Invalid JSON must survive in the failed queue instead of being dropped.
         connection = pika.BlockingConnection(pika.URLParameters(rabbit_url))
@@ -119,13 +116,12 @@ def test_broker_worker_database_and_delayed_feedback(postgres, monkeypatch):
             time.sleep(0.05)
         else:
             pytest.fail("Malformed task was not parked")
-        assert requests[0] == ("/predict", {"features": [1.0, 2.0]})
+        assert requests == [("/predict", {"features": [1.0, 2.0]})] * (candidate_failures + 1)
         with sessions() as db:
             assert db.query(ModelComparison).count() == 1
-            champion = db.get(AccuracyCounter, "champion")
-            candidate = db.get(AccuracyCounter, "candidate")
-            assert (champion.correct_count, champion.total_count) == (0, 1)
-            assert (candidate.correct_count, candidate.total_count) == (1, 1)
+            accuracy = accuracy_summary(db)
+            assert accuracy["champion"] == {"correct": 0, "total": 1, "accuracy": 0.0}
+            assert accuracy["candidate"] == {"correct": 1, "total": 1, "accuracy": 1.0}
     finally:
         if connection is not None and connection.is_open:
             connection.close()

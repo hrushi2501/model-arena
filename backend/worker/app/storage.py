@@ -1,19 +1,18 @@
-"""Persist comparisons using the schema owned and created by the control API."""
+"""Persist one comparison per prediction; PostgreSQL owns duplicate exclusion."""
 
 import os
-from functools import cached_property
 
-from sqlalchemy import URL, MetaData, create_engine, select, text
+from sqlalchemy import URL, create_engine, make_url, text
+
+COMPARISON_EXISTS = text("SELECT 1 FROM model_comparisons WHERE prediction_id = :request_id")
 
 
 class ComparisonStore:
     def __init__(self, engine=None):
         if engine is None:
-            database_url = os.getenv("DATABASE_URL")
-            if not database_url:
-                # Support the current Compose contract without building a DSN
-                # by string interpolation (passwords may contain URL characters).
-                database_url = URL.create(
+            url = make_url(
+                os.getenv("DATABASE_URL")
+                or URL.create(
                     "postgresql+psycopg",
                     username=os.getenv("POSTGRES_USER", "model_arena"),
                     password=os.environ["POSTGRES_PASSWORD"],
@@ -21,66 +20,52 @@ class ComparisonStore:
                     port=int(os.getenv("POSTGRES_PORT", "5432")),
                     database=os.getenv("POSTGRES_DB", "model_arena"),
                 )
-            engine = create_engine(database_url, pool_pre_ping=True)
+            )
+            if url.get_backend_name() != "postgresql":
+                raise ValueError("Worker requires a shared PostgreSQL database")
+            # Preserve existing options such as an isolated test search_path.
+            url = url.update_query_dict(
+                {
+                    "options": url.query.get("options", "")
+                    + " -c statement_timeout=5000 -c lock_timeout=5000"
+                }
+            )
+            engine = create_engine(url, pool_pre_ping=True, connect_args={"connect_timeout": 5})
         self.engine = engine
 
-    @cached_property
-    def tables(self):
-        metadata = MetaData()
-        metadata.reflect(
-            bind=self.engine,
-            only=["predictions", "feedback", "model_comparisons", "accuracy_counters"],
-        )
-        return metadata.tables
+    def check_schema(self):
+        with self.engine.connect() as conn:
+            conn.execute(
+                text("""
+                SELECT p.id, c.prediction_id FROM predictions p
+                LEFT JOIN model_comparisons c ON c.prediction_id = p.id LIMIT 0
+            """)
+            )
+
+    def completed(self, prediction_id: str) -> bool:
+        with self.engine.connect() as conn:
+            return (
+                conn.execute(COMPARISON_EXISTS, {"request_id": prediction_id}).first() is not None
+            )
 
     def save(self, task, candidate_pred: int) -> None:
-        predictions = self.tables["predictions"]
-        comparisons = self.tables["model_comparisons"]
-        feedback = self.tables["feedback"]
+        params = {
+            "request_id": task.request_id,
+            "champion": task.champion_pred,
+            "candidate": candidate_pred,
+        }
         with self.engine.begin() as conn:
-            # Same row lock as feedback: exactly one side accounts for the late
-            # candidate result, regardless of which transaction arrives first.
-            prediction = (
-                conn.execute(
-                    select(predictions).where(predictions.c.id == task.request_id).with_for_update()
-                )
-                .mappings()
-                .first()
-            )
-            if prediction is None:
-                raise ValueError("Unknown prediction")
-            if (
-                prediction["selected_role"] != "champion"
-                or prediction["prediction"] != task.champion_pred
-            ):
-                raise ValueError("Shadow task disagrees with persisted champion prediction")
-            existing = conn.execute(
-                select(comparisons).where(comparisons.c.prediction_id == task.request_id)
-            ).first()
-            if existing:
-                return
-            conn.execute(
-                comparisons.insert().values(
-                    prediction_id=task.request_id,
-                    champion_pred=task.champion_pred,
-                    candidate_pred=candidate_pred,
-                    is_match=(candidate_pred == task.champion_pred),
-                )
-            )
-            label = conn.execute(
-                select(feedback.c.ground_truth_label)
-                .where(feedback.c.prediction_id == task.request_id)
-                .order_by(feedback.c.id)
-                .limit(1)
+            inserted = conn.execute(
+                text("""
+                INSERT INTO model_comparisons
+                    (prediction_id, champion_pred, candidate_pred, is_match, timestamp)
+                SELECT id, prediction, :candidate, prediction = :candidate, CURRENT_TIMESTAMP
+                FROM predictions
+                WHERE id = :request_id AND selected_role = 'champion' AND prediction = :champion
+                ON CONFLICT (prediction_id) DO NOTHING
+                RETURNING prediction_id
+            """),
+                params,
             ).scalar_one_or_none()
-            if label is not None:
-                conn.execute(
-                    text("""
-                        INSERT INTO accuracy_counters (model_role, correct_count, total_count)
-                        VALUES ('candidate', :correct, 1)
-                        ON CONFLICT (model_role) DO UPDATE SET
-                            correct_count = accuracy_counters.correct_count + :correct,
-                            total_count = accuracy_counters.total_count + 1
-                    """),
-                    {"correct": int(candidate_pred == label)},
-                )
+            if inserted is None and conn.execute(COMPARISON_EXISTS, params).first() is None:
+                raise ValueError("Unknown or mismatched champion prediction")

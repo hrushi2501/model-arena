@@ -3,7 +3,6 @@ from datetime import datetime, timezone
 
 from sqlalchemy import (
     Boolean,
-    CheckConstraint,
     Column,
     DateTime,
     Float,
@@ -70,17 +69,3 @@ class ModelComparison(Base):
     candidate_pred = Column(Integer, nullable=False)
     is_match = Column(Boolean, nullable=False)
     timestamp = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-
-
-class AccuracyCounter(Base):
-    """Lifetime labeled counts, updated in the same transaction as each new label."""
-
-    __tablename__ = "accuracy_counters"
-    __table_args__ = (
-        CheckConstraint("model_role IN ('champion', 'candidate')"),
-        CheckConstraint("correct_count >= 0 AND correct_count <= total_count"),
-    )
-
-    model_role = Column(String(50), primary_key=True)
-    correct_count = Column(Integer, nullable=False, default=0)
-    total_count = Column(Integer, nullable=False, default=0)

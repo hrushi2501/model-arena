@@ -7,7 +7,7 @@ from functools import lru_cache
 
 import httpx
 import pika
-from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, FiniteFloat
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.storage import ComparisonStore
@@ -59,8 +59,8 @@ def rabbitmq_parameters():
 def retry_or_park(ch, method, properties, body, *, permanent: bool) -> None:
     headers = dict(properties.headers or {})
     retries = headers.get("x-shadow-retries", 0)
-    if not isinstance(retries, int) or isinstance(retries, bool) or retries < 0:
-        retries = MAX_ATTEMPTS
+    if type(retries) is not int or not 0 <= retries < MAX_ATTEMPTS:
+        retries = MAX_ATTEMPTS - 1
     target = FAILED_QUEUE if permanent or retries >= MAX_ATTEMPTS - 1 else QUEUE_NAME
     headers["x-shadow-retries"] = retries + 1
     # Confirms are enabled. If re-publishing fails, the original stays unacked
@@ -87,16 +87,20 @@ def process_shadow_task(ch, method, properties, body):
         # Never trust an arbitrary HTTP destination from a queue message.
         if task.candidate_url != candidate_endpoint():
             raise ValueError("Unconfigured candidate endpoint")
-    except (ValidationError, ValueError):
+    except ValueError:
         retry_or_park(ch, method, properties, body, permanent=True)
         return
 
     try:
+        store = get_store()
+        if store.completed(task.request_id):
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+            return
         with httpx.Client(timeout=5.0, follow_redirects=False) as client:
             response = client.post(task.candidate_url, json={"features": task.features})
             response.raise_for_status()
             candidate_pred = CandidateResult.model_validate(response.json()).prediction
-        get_store().save(task, candidate_pred)
+        store.save(task, candidate_pred)
     except (httpx.HTTPError, ValueError, SQLAlchemyError) as exc:
         # Exception text can expose database DSNs or private input values.
         logger.warning("Shadow processing failed (%s)", type(exc).__name__)
@@ -109,32 +113,25 @@ def main():
     logging.basicConfig(level=logging.INFO)
     get_store()
     while True:
-        connection = None
         try:
             # Wait for API-owned tables before accepting messages. Worker and
             # API start concurrently in Compose.
-            _ = get_store().tables
-            connection = pika.BlockingConnection(rabbitmq_parameters())
-            channel = connection.channel()
-            channel.queue_declare(queue=QUEUE_NAME, durable=True)
-            channel.queue_declare(queue=FAILED_QUEUE, durable=True)
-            channel.confirm_delivery()
-            channel.basic_qos(prefetch_count=1)
-            channel.basic_consume(
-                queue=QUEUE_NAME, on_message_callback=process_shadow_task, auto_ack=False
-            )
-            logger.info("Worker listening on %s", QUEUE_NAME)
-            channel.start_consuming()
+            get_store().check_schema()
+            with pika.BlockingConnection(rabbitmq_parameters()) as connection:
+                channel = connection.channel()
+                channel.queue_declare(queue=QUEUE_NAME, durable=True)
+                channel.queue_declare(queue=FAILED_QUEUE, durable=True)
+                channel.confirm_delivery()
+                channel.basic_qos(prefetch_count=1)
+                channel.basic_consume(
+                    queue=QUEUE_NAME, on_message_callback=process_shadow_task, auto_ack=False
+                )
+                logger.info("Worker listening on %s", QUEUE_NAME)
+                channel.start_consuming()
         except KeyboardInterrupt:
             return
         except (pika.exceptions.AMQPError, OSError, SQLAlchemyError, ValueError) as exc:
             logger.warning("Worker reconnecting (%s)", type(exc).__name__)
-        finally:
-            if connection is not None and connection.is_open:
-                try:
-                    connection.close()
-                except pika.exceptions.AMQPError:
-                    logger.warning("Worker connection close failed")
         time.sleep(5)
 
 

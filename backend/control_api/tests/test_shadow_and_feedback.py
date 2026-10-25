@@ -1,7 +1,7 @@
 import asyncio
 import importlib.util
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 
 import httpx
 import pika
@@ -12,11 +12,11 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.api.v1 import routes
-from app.db.backfill_accuracy import rebuild_accuracy
-from app.db.models import AccuracyCounter, Feedback, ModelComparison, Prediction, Rollout
+from app.db.models import Feedback, ModelComparison, Prediction, Rollout
 from app.db.session import Base, get_db
 from app.main import app
 from app.services import queue
+from app.services.feedback import accuracy_summary
 
 # The worker is a separate deployable package with its own `app` namespace.
 spec = importlib.util.spec_from_file_location(
@@ -186,7 +186,8 @@ def test_publisher_contract_and_broker_failure(monkeypatch):
     import json
 
     monkeypatch.setenv("RABBITMQ_URL", "amqp://rabbitmq:5672/")
-    connection = Mock()
+    connection = MagicMock()
+    connection.__enter__.return_value = connection
     monkeypatch.setattr(queue.pika, "BlockingConnection", Mock(return_value=connection))
     assert queue.publish_shadow_task("req-1", [1.0], 2, "http://model-candidate:8000/predict")
     channel = connection.channel.return_value
@@ -201,14 +202,14 @@ def test_publisher_contract_and_broker_failure(monkeypatch):
         "champion_pred": 2,
         "candidate_url": "http://model-candidate:8000/predict",
     }
-    connection.close.assert_called_once()
+    connection.__exit__.assert_called_once()
     channel.basic_publish.side_effect = pika.exceptions.UnroutableError([])
     assert (
         queue.publish_shadow_task("req-1", [1.0], 2, "http://model-candidate:8000/predict") is False
     )
 
 
-def test_backfill_existing_feedback_is_repeatable(database):
+def test_existing_duplicate_feedback_counts_first_label_without_backfill(database):
     _, sessions = database
     add_prediction(sessions)
     with sessions() as db:
@@ -219,7 +220,59 @@ def test_backfill_existing_feedback_is_repeatable(database):
             ]
         )
         db.commit()
-        rebuild_accuracy(db)
-        rebuild_accuracy(db)
-        counter = db.get(AccuracyCounter, "champion")
-        assert (counter.correct_count, counter.total_count) == (1, 1)
+        assert accuracy_summary(db)["champion"] == {"correct": 1, "total": 1, "accuracy": 1.0}
+
+
+@pytest.mark.parametrize(
+    "role,champion,exists", [("champion", 2, True), ("candidate", 1, True), ("champion", 1, False)]
+)
+def test_worker_rejects_unknown_or_mismatched_prediction(database, role, champion, exists):
+    engine, sessions = database
+    if exists:
+        add_prediction(sessions, role=role, label=champion)
+    store = worker_storage.ComparisonStore(engine)
+    with pytest.raises(ValueError, match="Unknown or mismatched"):
+        store.save(task(), 0)
+    assert store.completed("pred-1") is False
+    with sessions() as db:
+        assert db.query(ModelComparison).count() == 0
+
+
+def test_accuracy_combines_served_and_shadow_labels_without_double_counting(database):
+    engine, sessions = database
+    add_prediction(sessions, "shadow")
+    add_prediction(sessions, "champion-only")
+    add_prediction(sessions, "candidate", role="candidate", label=0)
+    add_prediction(sessions, "unlabeled")
+    store = worker_storage.ComparisonStore(engine)
+    store.save(task("shadow"), 0)
+    store.save(task("unlabeled"), 0)
+    client = TestClient(app)
+    for prediction_id in ("shadow", "champion-only", "candidate"):
+        assert (
+            client.post(
+                "/api/v1/feedback", json={"prediction_id": prediction_id, "ground_truth_label": 0}
+            ).status_code
+            == 200
+        )
+    with sessions() as db:
+        assert accuracy_summary(db) == {
+            "champion": {"correct": 0, "total": 2, "accuracy": 0.0},
+            "candidate": {"correct": 2, "total": 2, "accuracy": 1.0},
+        }
+
+
+def test_publisher_authentication_error_does_not_log_credentials(monkeypatch, caplog):
+    import secrets
+
+    secret = secrets.token_urlsafe()
+    monkeypatch.setattr(
+        queue.pika,
+        "BlockingConnection",
+        Mock(side_effect=pika.exceptions.ProbableAuthenticationError(secret)),
+    )
+    assert (
+        queue.publish_shadow_task("req-1", [1.0], 1, "http://model-candidate:8000/predict") is False
+    )
+    assert "ProbableAuthenticationError" in caplog.text
+    assert secret not in caplog.text

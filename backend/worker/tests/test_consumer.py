@@ -24,6 +24,14 @@ def message(monkeypatch):
     return Mock(), SimpleNamespace(delivery_tag=42), pika.BasicProperties(message_id="pred-1"), body
 
 
+@pytest.fixture(autouse=True)
+def store(monkeypatch):
+    store = Mock()
+    store.completed.return_value = False
+    monkeypatch.setattr(consumer, "get_store", lambda: store)
+    return store
+
+
 def http_client(monkeypatch, response=None, error=None):
     client = Mock()
     client.__enter__ = Mock(return_value=client)
@@ -31,20 +39,18 @@ def http_client(monkeypatch, response=None, error=None):
     client.post.side_effect = error
     client.post.return_value = httpx.Response(
         200,
-        json=response or {"prediction": 0},
+        json=response if response is not None else {"prediction": 0},
         request=httpx.Request("POST", "http://model-candidate:8000/predict"),
     )
     monkeypatch.setattr(consumer.httpx, "Client", Mock(return_value=client))
     return client
 
 
-def test_candidate_payload_and_commit_before_ack(message, monkeypatch):
+def test_candidate_payload_and_commit_before_ack(message, monkeypatch, store):
     channel, _, _, _ = message
     client = http_client(monkeypatch)
     events = []
-    store = Mock()
     store.save.side_effect = lambda task, prediction: events.append(("committed", prediction))
-    monkeypatch.setattr(consumer, "get_store", lambda: store)
     channel.basic_ack.side_effect = lambda **kwargs: events.append(("ack", kwargs["delivery_tag"]))
     consumer.process_shadow_task(*message)
     client.post.assert_called_once_with(
@@ -57,12 +63,10 @@ def test_candidate_payload_and_commit_before_ack(message, monkeypatch):
 @pytest.mark.parametrize(
     "retries,target", [(0, "shadow_tasks"), (1, "shadow_tasks"), (2, "shadow_tasks.failed")]
 )
-def test_candidate_failure_retries_then_parks(message, monkeypatch, retries, target):
+def test_candidate_failure_retries_then_parks(message, monkeypatch, store, retries, target):
     channel, method, properties, body = message
     properties.headers = {"x-shadow-retries": retries}
     http_client(monkeypatch, error=httpx.ConnectError("unavailable"))
-    store = Mock()
-    monkeypatch.setattr(consumer, "get_store", lambda: store)
     consumer.process_shadow_task(*message)
     store.save.assert_not_called()
     args = channel.basic_publish.call_args.kwargs
@@ -72,12 +76,10 @@ def test_candidate_failure_retries_then_parks(message, monkeypatch, retries, tar
     channel.basic_ack.assert_called_once_with(delivery_tag=method.delivery_tag)
 
 
-def test_database_failure_does_not_ack_as_success(message, monkeypatch):
+def test_database_failure_does_not_ack_as_success(message, monkeypatch, store):
     channel, _, _, _ = message
     http_client(monkeypatch)
-    store = Mock()
     store.save.side_effect = OperationalError(None, None, Exception("database unavailable"))
-    monkeypatch.setattr(consumer, "get_store", lambda: store)
     events = []
     channel.basic_publish.side_effect = lambda **kwargs: events.append("retry-confirmed")
     channel.basic_ack.side_effect = lambda **kwargs: events.append("ack")
@@ -118,11 +120,9 @@ def test_malformed_or_unconfigured_destination_is_parked(message, monkeypatch, b
 
 
 @pytest.mark.parametrize("value", [True, "1", 1.2])
-def test_invalid_candidate_prediction_is_not_persisted(message, monkeypatch, value):
+def test_invalid_candidate_prediction_is_not_persisted(message, monkeypatch, store, value):
     channel, _, _, _ = message
     http_client(monkeypatch, response={"prediction": value})
-    store = Mock()
-    monkeypatch.setattr(consumer, "get_store", lambda: store)
     consumer.process_shadow_task(*message)
     store.save.assert_not_called()
     assert channel.basic_publish.call_args.kwargs["routing_key"] == "shadow_tasks"
@@ -138,3 +138,60 @@ def test_rabbitmq_compose_credentials_are_read_from_environment(monkeypatch):
     parameters = consumer.rabbitmq_parameters()
     assert parameters.credentials.username == "test-worker"
     assert parameters.credentials.password == password
+
+
+def test_commit_then_lost_ack_does_not_repeat_candidate_inference(message, monkeypatch, store):
+    channel, method, properties, body = message
+    client = http_client(monkeypatch)
+    store.save.side_effect = lambda *args: setattr(store.completed, "return_value", True)
+    channel.basic_ack.side_effect = pika.exceptions.StreamLostError("connection lost")
+    with pytest.raises(pika.exceptions.StreamLostError):
+        consumer.process_shadow_task(*message)
+    # The broker redelivers after reconnect, while the Candidate may be offline.
+    client.post.side_effect = httpx.ConnectError("candidate unavailable")
+    reconnected = Mock()
+    consumer.process_shadow_task(reconnected, method, properties, body)
+    assert client.post.call_count == 1
+    assert store.save.call_count == 1
+    reconnected.basic_ack.assert_called_once_with(delivery_tag=method.delivery_tag)
+    reconnected.basic_publish.assert_not_called()
+
+
+def test_database_unavailable_before_inference_retries_without_http(message, monkeypatch, store):
+    channel, _, _, _ = message
+    client = http_client(monkeypatch)
+    store.completed.side_effect = OperationalError(None, None, Exception("unavailable"))
+    consumer.process_shadow_task(*message)
+    client.post.assert_not_called()
+    assert channel.basic_publish.call_args.kwargs["routing_key"] == "shadow_tasks"
+
+
+@pytest.mark.parametrize("retries", [-1, True, "2", None, 1.5, 2**63 - 1])
+def test_bad_retry_headers_are_parked_without_overflow(message, retries):
+    channel, method, properties, body = message
+    properties.headers = {"x-shadow-retries": retries}
+    consumer.retry_or_park(channel, method, properties, body, permanent=False)
+    args = channel.basic_publish.call_args.kwargs
+    assert args["routing_key"] == "shadow_tasks.failed"
+    assert args["properties"].headers["x-shadow-retries"] == consumer.MAX_ATTEMPTS
+
+
+@pytest.mark.parametrize("payload", [{}, [], {"prediction": None}, {"prediction": [1]}])
+def test_invalid_candidate_payloads_are_retried(message, monkeypatch, store, payload):
+    channel, _, _, _ = message
+    http_client(monkeypatch, response=payload)
+    consumer.process_shadow_task(*message)
+    store.save.assert_not_called()
+    assert channel.basic_publish.call_args.kwargs["routing_key"] == "shadow_tasks"
+
+
+@pytest.mark.parametrize("status", [301, 400, 404, 429, 500, 503])
+def test_candidate_http_failures_are_not_recorded(message, monkeypatch, store, status):
+    channel, _, _, _ = message
+    client = http_client(monkeypatch)
+    client.post.return_value = httpx.Response(
+        status, request=httpx.Request("POST", "http://model-candidate:8000/predict")
+    )
+    consumer.process_shadow_task(*message)
+    store.save.assert_not_called()
+    assert channel.basic_publish.call_args.kwargs["routing_key"] == "shadow_tasks"

@@ -1,47 +1,39 @@
 # Queue worker
 
-Consumes persistent JSON events from the durable `shadow_tasks` RabbitMQ queue.
-Each task contains `request_id`, `features`, `champion_pred`, and `candidate_url`.
-The worker validates the task, posts `{"features": [...]}` to the configured
-Candidate inference endpoint using HTTPX, and expects an integer `prediction` in
-the JSON response. Redirects are disabled and destinations must match `CANDIDATE_URL`.
+Consumes JSON tasks containing `request_id`, `features`, `champion_pred`, and
+`candidate_url` from durable `shadow_tasks`. It validates the task and destination,
+posts `{"features": [...]}` to the Candidate with HTTPX, and requires an integer
+`prediction` in the response. Redirects are disabled.
 
-The worker commits one PostgreSQL `model_comparisons` row per prediction, containing
-`prediction_id`, `champion_pred`, `candidate_pred`, `is_match`, and `timestamp`,
-then acknowledges the RabbitMQ delivery. The primary key and a lock on the
-prediction row make redelivery idempotent. If a ground-truth label already exists,
-the same transaction updates the Candidate accuracy counter. The API owns table
-creation; the worker waits for those tables before consuming.
+Each successful task commits a `model_comparisons` row containing `prediction_id`,
+`champion_pred`, `candidate_pred`, `is_match`, and `timestamp` before acknowledging.
+A conditional insert verifies the persisted Champion prediction, and PostgreSQL
+`ON CONFLICT` prevents duplicates. Completed tasks are acknowledged without calling
+the Candidate again, including redelivery after a commit followed by a lost ACK.
+Accuracy counters are derived by the API from saved comparisons and feedback;
+the worker does not maintain a second copy. The API owns schema creation and the
+worker waits for its tables before consuming.
 
-Candidate or database failures get up to three processing attempts. Malformed
-messages and exhausted tasks are published to durable `shadow_tasks.failed` for
-inspection. The worker confirms the retry/failed publication before acknowledging
-the original; a failed re-publication leaves the original unacknowledged and
-reconnects. Retries are immediate and bounded; this is not a delayed backoff queue.
-After fixing a failed task's cause, an operator can republish it to `shadow_tasks`
-with its `x-shadow-retries` header reset. Replaying a completed prediction does not
-duplicate comparisons or accuracy counts.
+Failed HTTP/database work gets three immediate processing attempts, then moves to
+durable `shadow_tasks.failed`. Malformed tasks and unconfigured destinations are
+parked directly. Retry publication is confirmed before acknowledging the original;
+a failed publication leaves it unacknowledged for redelivery after reconnect.
+Retry headers are validated and capped. To replay a failed task after fixing its
+cause, republish it to `shadow_tasks` with `x-shadow-retries` reset.
 
-Configuration uses only environment variables:
+Configuration uses environment variables only:
 
-- `RABBITMQ_URL`, default `amqp://rabbitmq:5672/`. When absent, the current Compose
-  variables `RABBITMQ_HOST`, `RABBITMQ_USER`, and `RABBITMQ_PASSWORD` are supported.
-- `DATABASE_URL`, a shared PostgreSQL SQLAlchemy URL. When absent, use Compose's
-  `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_DB`, with optional
-  `POSTGRES_HOST` (default `postgres`) and `POSTGRES_PORT` (default `5432`). There
-  is no embedded database password or silent SQLite fallback in the worker.
-- `CANDIDATE_URL`, default `http://model-candidate:8000/predict`. The Compose value
-  `http://model-candidate:8000` is also accepted and gets `/predict` appended.
-  Configure the same endpoint on the API and worker.
+- `RABBITMQ_URL`, default `amqp://rabbitmq:5672/`. If absent, Compose's separate
+  `RABBITMQ_HOST`, `RABBITMQ_USER`, and `RABBITMQ_PASSWORD` are supported.
+- `DATABASE_URL`, a shared PostgreSQL SQLAlchemy URL. Otherwise use Compose's
+  `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_DB`, optionally `POSTGRES_HOST`
+  (default `postgres`) and `POSTGRES_PORT` (default `5432`). Database connect,
+  statement, and lock waits are bounded to five seconds.
+- `CANDIDATE_URL`, default `http://model-candidate:8000/predict`. A base URL such as
+  Compose's `http://model-candidate:8000` gets `/predict` appended. Match the API endpoint.
 
-Use Python 3.12, install project/dev dependencies, and run from this directory:
-
-```sh
-python -m pytest -q
-python -m app.consumer
-```
-
-The service loop reconnects after broker or database startup failures. Inference
+Use Python 3.12 and project/dev dependencies. From this directory, run
+`python -m pytest -q` or start the worker with `python -m app.consumer`.
+The loop reconnects after startup, broker, or database failures. Real inference
 requires a Candidate exposing `POST /predict`; the current upstream serving app
-is liveness-only. Tests use a controlled HTTP model stub to verify messaging and
-persistence independently of training/model-serving implementation.
+is liveness-only. Integration tests use a controlled model HTTP stub.
