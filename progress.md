@@ -41,7 +41,7 @@ Lane assignments are proposed work ownership. Branch existence or a lane name is
 
 | Lane | Developer | Branch | First unblocked work | Dependencies |
 | --- | --- | --- | --- | --- |
-| A: ML and serving | Unclaimed | `dev/ml-serving` (planned) | P0-02/P0-04, then P1-A1–A4 | Signature, evaluation and artifact contracts |
+| A: ML and serving | Gautam | `dev/ml-serving` (claimed) | P0-02/P0-04, then P1-A1–A4 | Signature, evaluation and artifact contracts |
 | B: API, DB and policy | Hrushi | `Hrushi` | Coordinate P0-01–09, then P1-B1–B3 | Cross-lane contract review |
 | C: frontend | Unclaimed | `dev/frontend` (planned) | P0-03/P0-08, then P1-C1–C2 | UI shell can start independently; live integration needs agreed API |
 | D: worker, infrastructure and metrics | Unclaimed | `dev/worker-infra` (planned) | P0-05–09, then P1-D1–D3 | Event/DB/policy contracts before live consumption |
@@ -63,6 +63,7 @@ Planning validation for this change: `git diff --check` passed; the skill-creato
 - No model artifacts, running service integration or collected live quality/latency evidence are established by this audit. Dataset and policy values are proposed until selected and reproduced.
 - Operator access and hosted topology are undecided. Keep the local stack's current network boundary while those contracts are implemented.
 - The four lanes can begin contract review and their independent foundation tasks; live integration depends on the named producer handoffs in the checklist.
+- Lane A architecture decisions: MLflow stays on the compose Postgres-backed server at http://localhost:5000 (serving containers need registry access); local DVC remote; fault injection will be a demo-only env var.
 
 ## Update rules for developers and agents
 
@@ -89,3 +90,24 @@ For each active/completed task, record:
 - Limits / blockers: unrun checks and unresolved behavior
 - Next handoff: task ID or receiving lane
 ```
+
+## Task log
+
+### 2026-10-25 — P0-01 + P0-02 — Lane A claim, local prerequisite checks, and Wine dataset/signature contract proposal
+
+- Owner / branch: Lane A, Gautam, `dev/ml-serving`
+- Status: Implemented; verification pending
+- Change and evidence: `docs/AGENT-RULES.md`, `backend/ml/README.md`, `backend/ml/params.yaml`, this change
+- Checks:
+  - `git branch --show-current` (exit 0: `dev/ml-serving`)
+  - `git status --porcelain` (exit 0: clean working tree)
+  - `uv --version` (exit 0: `uv 0.10.8 (c021be36a 2026-03-03)`)
+  - `uv python list --only-installed` (exit 0: Python 3.12.13 present)
+  - `bun --version` (exit 1: missing, reported)
+  - `docker --version` (exit 0: `Docker version 29.6.1, build 8900f1d`)
+  - `docker compose version` (exit 0: `Docker Compose version v5.3.0`)
+  - Port check via `Get-NetTCPConnection` for ports 5000, 5432, 8080, 5672, 15672 (exit 0: all free)
+  - Feature verification via `uv run --no-sync --project backend/ml python` with `sklearn.datasets.load_wine()` (exit 0: 178 rows, 3 classes, 13 features confirmed)
+  - YAML parse verification via `Get-Content backend/ml/params.yaml -Raw | uv run --no-sync --project backend/ml python -c 'import yaml, sys; print(yaml.safe_load(sys.stdin))'` (exit 0: parses successfully)
+- Limits / blockers: `bun` not installed locally (Lane C frontend dependency; not required for Lane A). Checklist boxes unchecked pending contract review and agreement by Lane B (Hrushi) and Lanes C/D.
+- Next handoff: P0-02 contract review with Lane B (Hrushi) and Lanes C/D; proceed with P0-04 (internal serving inference/readiness contract) and P1-A1.
