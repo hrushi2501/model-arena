@@ -348,10 +348,9 @@ export default function OperatorControlPage() {
           <table className="data-table">
             <thead>
               <tr>
-                <th style={{ width: "120px" }}>Timestamp</th>
-                <th style={{ width: "120px" }}>Event</th>
+                <th style={{ width: "140px" }}>Timestamp</th>
+                <th style={{ width: "140px" }}>Event</th>
                 <th>Reason</th>
-                <th>Details</th>
               </tr>
             </thead>
             <tbody>
@@ -362,21 +361,6 @@ export default function OperatorControlPage() {
                   </td>
                   <td>{getEventBadge(evt.event_type)}</td>
                   <td style={{ fontWeight: 500 }}>{evt.reason}</td>
-                  <td
-                    className="mono-cell"
-                    style={{
-                      maxWidth: "340px",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                      fontSize: "11px",
-                      color: "var(--text-muted)",
-                    }}
-                  >
-                    {typeof evt.details_json === "string"
-                      ? evt.details_json
-                      : JSON.stringify(evt.details_json || {})}
-                  </td>
                 </tr>
               ))}
             </tbody>
