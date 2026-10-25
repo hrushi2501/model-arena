@@ -1,7 +1,19 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import Column, DateTime, Float, Integer, String, Text
+
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+)
 from sqlalchemy.sql import func
+
 from app.db.session import Base
 
 
@@ -48,3 +60,27 @@ class AuditEvent(Base):
     event_type = Column(String(50), nullable=False)  # STAGE_CHANGE, DECISION, ROLLBACK, PROMOTE
     reason = Column(String(500), nullable=False)
     details_json = Column(Text, nullable=True)
+
+
+class ModelComparison(Base):
+    __tablename__ = "model_comparisons"
+
+    prediction_id = Column(String(64), ForeignKey("predictions.id"), primary_key=True)
+    champion_pred = Column(Integer, nullable=False)
+    candidate_pred = Column(Integer, nullable=False)
+    is_match = Column(Boolean, nullable=False)
+    timestamp = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class AccuracyCounter(Base):
+    """Lifetime labeled counts, updated in the same transaction as each new label."""
+
+    __tablename__ = "accuracy_counters"
+    __table_args__ = (
+        CheckConstraint("model_role IN ('champion', 'candidate')"),
+        CheckConstraint("correct_count >= 0 AND correct_count <= total_count"),
+    )
+
+    model_role = Column(String(50), primary_key=True)
+    correct_count = Column(Integer, nullable=False, default=0)
+    total_count = Column(Integer, nullable=False, default=0)

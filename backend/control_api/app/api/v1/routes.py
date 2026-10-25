@@ -1,16 +1,15 @@
 import json
 import uuid
-from typing import Any
-from fastapi import APIRouter, Depends, HTTPException
+
+from fastapi import APIRouter, BackgroundTasks, Depends
 from sqlalchemy.orm import Session
 
-from app.db.models import AuditEvent, Feedback, Prediction, Rollout
+from app.db.models import AuditEvent, Prediction, Rollout
 from app.db.session import get_db
 from app.schemas.schemas import (
     AdvanceRolloutRequest,
     AuditEventResponse,
     EvaluateResponse,
-    FeedbackRequest,
     MetricsSummaryResponse,
     PredictionRequest,
     PredictionResponse,
@@ -18,7 +17,9 @@ from app.schemas.schemas import (
     RolloutStatusResponse,
 )
 from app.services.decision_engine import evaluate_rollout, execute_advance, execute_rollback
-from app.services.routing import determine_serving_role, forward_prediction
+from app.services.feedback import accuracy_summary
+from app.services.queue import publish_shadow_task
+from app.services.routing import CANDIDATE_URL, determine_serving_role, forward_prediction
 
 router = APIRouter()
 
@@ -40,12 +41,15 @@ def get_or_create_active_rollout(db: Session) -> Rollout:
 
 
 @router.post("/predict", response_model=PredictionResponse)
-async def predict(request: PredictionRequest, db: Session = Depends(get_db)):
+async def predict(
+    request: PredictionRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)
+):
     """
     Routes an incoming prediction request deterministically to Champion or Candidate.
     Records the prediction, latency, and chosen version in PostgreSQL for auditing.
     """
     rollout = get_or_create_active_rollout(db)
+    shadow_enabled = rollout.state == "SHADOW"
     role, target_url = determine_serving_role(request.client_id, rollout)
     selected_version = rollout.candidate_version if role == "candidate" else rollout.champion_version
 
@@ -64,6 +68,11 @@ async def predict(request: PredictionRequest, db: Session = Depends(get_db)):
     )
     db.add(db_pred)
     db.commit()
+
+    if shadow_enabled:
+        background_tasks.add_task(
+            publish_shadow_task, pred_id, request.features, result["prediction"], CANDIDATE_URL
+        )
 
     return PredictionResponse(
         prediction=result["prediction"],
@@ -144,18 +153,6 @@ def evaluate_active_rollout(db: Session = Depends(get_db)):
     )
 
 
-@router.post("/feedback")
-def submit_feedback(request: FeedbackRequest, db: Session = Depends(get_db)):
-    """Records delayed ground-truth feedback for accuracy tracking against predictions."""
-    fb = Feedback(
-        prediction_id=request.prediction_id,
-        ground_truth_label=request.ground_truth_label,
-    )
-    db.add(fb)
-    db.commit()
-    return {"status": "recorded", "prediction_id": request.prediction_id}
-
-
 @router.get("/audit", response_model=list[AuditEventResponse])
 def get_audit_trail(limit: int = 50, db: Session = Depends(get_db)):
     """Returns append-only audit trail of rollout decisions and stage transitions."""
@@ -200,27 +197,7 @@ def get_metrics_summary(db: Session = Depends(get_db)):
     cand_errors = sum(1 for p in cand_preds if p.status_code >= 500)
     cand_error_rate = (cand_errors / cand_count) if cand_count > 0 else 0.0
 
-    # feedback accuracies
-    cand_feedback = (
-        db.query(Feedback, Prediction)
-        .join(Prediction, Feedback.prediction_id == Prediction.id)
-        .filter(Prediction.selected_role == "candidate")
-        .all()
-    )
-    champ_feedback = (
-        db.query(Feedback, Prediction)
-        .join(Prediction, Feedback.prediction_id == Prediction.id)
-        .filter(Prediction.selected_role == "champion")
-        .all()
-    )
-
-    cand_acc = None
-    if cand_feedback:
-        cand_acc = round(sum(1 for fb, p in cand_feedback if fb.ground_truth_label == p.prediction) / len(cand_feedback), 4)
-
-    champ_acc = None
-    if champ_feedback:
-        champ_acc = round(sum(1 for fb, p in champ_feedback if fb.ground_truth_label == p.prediction) / len(champ_feedback), 4)
+    accuracy = accuracy_summary(db)
 
     return MetricsSummaryResponse(
         total_predictions=len(all_preds),
@@ -230,6 +207,8 @@ def get_metrics_summary(db: Session = Depends(get_db)):
         rollout_state=rollout.state,
         candidate_p95_latency_ms=round(cand_p95, 2),
         candidate_error_rate=round(cand_error_rate, 4),
-        candidate_accuracy=cand_acc,
-        champion_accuracy=champ_acc,
+        candidate_accuracy=accuracy["candidate"]["accuracy"],
+        champion_accuracy=accuracy["champion"]["accuracy"],
+        champion_labeled_count=accuracy["champion"]["total"],
+        candidate_labeled_count=accuracy["candidate"]["total"],
     )
