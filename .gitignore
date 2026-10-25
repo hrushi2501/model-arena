@@ -58,6 +58,9 @@ dvc-storage/
 backend/ml/data/raw/
 backend/ml/data/processed/
 backend/ml/models/
+backend/model_serving/models/
+backend/model_serving/app/models/
+*.joblib
 mlruns/
 mlartifacts/
 mlflow.db
