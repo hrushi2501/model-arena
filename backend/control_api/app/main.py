@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 
 from app.api.v1.routes import router as api_v1_router
 from app.db.session import Base, SessionLocal, engine
@@ -37,6 +38,12 @@ app.add_middleware(
 )
 
 app.include_router(api_v1_router, prefix="/api/v1")
+
+
+@app.get("/", include_in_schema=False)
+def root_redirect():
+    """Redirect root path to interactive Swagger documentation."""
+    return RedirectResponse(url="/docs")
 
 
 @app.get("/health/live", tags=["health"])
