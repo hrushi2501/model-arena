@@ -4,4 +4,10 @@ verbose: false
 
 secret:
   show_secrets: false
-  ignore_known_secrets: false
+  ignore_known_secrets: true
+  ignored_matches:
+    - name: Docker compose env placeholder
+      match: c39b337aba9762f0ede857f0c798d34f1e5a8abae7b0d535cb4cdd46c8e509d7
+  ignored_paths:
+    - "compose.yaml"
+    - "**/.env.example"
