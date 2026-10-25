@@ -6,7 +6,7 @@ import pika
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("worker")
 
-RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://model_arena:change-this-rabbitmq-password@rabbitmq:5672/")
+RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://rabbitmq:5672/")
 QUEUE_NAME = "shadow_tasks"
 
 
