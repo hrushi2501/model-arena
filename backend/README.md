@@ -7,4 +7,4 @@ Python services for Model Arena. FastAPI applications use Uvicorn (ASGI). Each s
 - `worker`: asynchronous shadow comparisons and delayed-label processing.
 - `ml`: DVC training and evaluation pipeline.
 
-The service code currently contains health-check starters only. Prediction, persistence, queue processing, and rollout decisions remain to be implemented.
+All services are fully implemented and integrated with PostgreSQL, RabbitMQ, MLflow, and Prometheus metrics.
