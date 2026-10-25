@@ -1,10 +1,11 @@
 from datetime import datetime
 from typing import Any
-from pydantic import BaseModel, Field
+
+from pydantic import BaseModel, Field, FiniteFloat
 
 
 class PredictionRequest(BaseModel):
-    features: list[float] = Field(..., description="List of feature values for model inference (e.g. 13 features for Wine)")
+    features: list[FiniteFloat] = Field(..., description="List of feature values for model inference (e.g. 13 features for Wine)")
     client_id: str | None = Field(None, description="Optional unique client ID for deterministic canary routing")
 
 
@@ -35,8 +36,8 @@ class RollbackRequest(BaseModel):
 
 
 class FeedbackRequest(BaseModel):
-    prediction_id: str
-    ground_truth_label: int
+    prediction_id: str = Field(min_length=1, max_length=64)
+    ground_truth_label: int = Field(strict=True)
 
 
 class AuditEventResponse(BaseModel):
@@ -65,3 +66,5 @@ class MetricsSummaryResponse(BaseModel):
     candidate_error_rate: float
     candidate_accuracy: float | None
     champion_accuracy: float | None
+    champion_labeled_count: int = 0
+    candidate_labeled_count: int = 0

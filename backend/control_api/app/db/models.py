@@ -1,7 +1,18 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import Column, DateTime, Float, Integer, String, Text
+
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+)
 from sqlalchemy.sql import func
+
 from app.db.session import Base
 
 
@@ -48,3 +59,23 @@ class AuditEvent(Base):
     event_type = Column(String(50), nullable=False)  # STAGE_CHANGE, DECISION, ROLLBACK, PROMOTE
     reason = Column(String(500), nullable=False)
     details_json = Column(Text, nullable=True)
+
+
+class ModelComparison(Base):
+    __tablename__ = "model_comparisons"
+
+    prediction_id = Column(String(64), ForeignKey("predictions.id"), primary_key=True)
+    champion_pred = Column(Integer, nullable=False)
+    candidate_pred = Column(Integer, nullable=False)
+    is_match = Column(Boolean, nullable=False)
+    timestamp = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class ShadowOutbox(Base):
+    """Unpublished shadow events, committed atomically with their predictions."""
+
+    __tablename__ = "shadow_outbox"
+
+    prediction_id = Column(String(64), ForeignKey("predictions.id"), primary_key=True)
+    payload_json = Column(Text, nullable=False)
+    available_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)

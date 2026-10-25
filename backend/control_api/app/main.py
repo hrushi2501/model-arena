@@ -1,11 +1,15 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Response
+from fastapi import Depends, FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
+from sqlalchemy.orm import Session
 
-from app.api.v1.routes import router as api_v1_router
-from app.db.session import Base, SessionLocal, engine
 from app.api.v1.routes import get_or_create_active_rollout
+from app.api.v1.routes import router as api_v1_router
+from app.db.session import Base, SessionLocal, engine, get_db
+from app.schemas.schemas import FeedbackRequest
+from app.services.feedback import record_feedback
+from app.services.outbox import dispatching
 
 
 @asynccontextmanager
@@ -18,7 +22,8 @@ async def lifespan(app: FastAPI):
         get_or_create_active_rollout(db)
     finally:
         db.close()
-    yield
+    async with dispatching(SessionLocal):
+        yield
 
 
 app = FastAPI(
@@ -62,6 +67,12 @@ ROLLBACK_EVENTS_TOTAL = Counter(
 )
 
 app.include_router(api_v1_router, prefix="/api/v1")
+
+
+@app.post("/api/v1/feedback")
+def submit_feedback(request: FeedbackRequest, db: Session = Depends(get_db)):
+    """Attach a delayed label once and update both available model accuracies."""
+    return record_feedback(request, db)
 
 
 @app.get("/health/live", tags=["health"])
