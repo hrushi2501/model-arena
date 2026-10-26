@@ -566,3 +566,15 @@ a {
   font-size: 11px;
   color: var(--text-dim);
 }
+
+/* Functional operator controls share the existing palette. */
+.panel { margin-bottom: 22px; }
+.release-heading { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 18px; flex-wrap: wrap; }
+.metric-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-bottom: 22px; }
+.metric-value { font-size: 18px; }
+.field-label { display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px; font-weight: 600; }
+input, textarea, select { border: 1px solid var(--border); border-radius: 3px; padding: 9px; background: var(--bg-inset); color: var(--text-main); font: inherit; width: 100%; }
+textarea { font-family: ui-monospace, monospace; resize: vertical; }
+.feedback-box { margin-top: 14px; overflow-wrap: anywhere; }
+.model-version-code { overflow-wrap: anywhere; }
+@media (max-width: 720px) { .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .nav-brand-tag { display: none; } .header-strip { gap: 12px; flex-wrap: wrap; } }

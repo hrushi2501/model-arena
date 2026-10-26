@@ -1,199 +1,149 @@
 # Model Arena
 
-**Model Arena** is an enterprise-grade MLOps platform for safely releasing Machine Learning models into production using **Shadow Testing**, **Deterministic Canary Rollouts**, and **Autonomous Evidence-Based Rollback**.
+A local release-testing application for a Wine classifier. Operators compare a
+registered Candidate with the Champion, collect delayed labels, and advance or
+roll back traffic using explicit evidence.
 
----
-
-## 🏛️ System Architecture
-
-```text
-                               ┌────────────────────────────────────────────────┐
-                               │             Next.js UI (Port 3000)             │
-                               └───────────────────────┬────────────────────────┘
-                                                       │
-                                                       ▼
-                               ┌────────────────────────────────────────────────┐
-                               │            Nginx Gateway (Port 8080)           │
-                               └───────────────────────┬────────────────────────┘
-                                                       │
-                                                       ▼
-                               ┌────────────────────────────────────────────────┐
-                               │          FastAPI Control API (Port 8000)       │
-                               │  - Deterministic Canary Traffic Splitter       │
-                               │  - Safe Release Decision Engine                │
-                               │  - Transactional Outbox Pattern                │
-                               └───┬─────────────┬─────────────┬─────────────┬──┘
-                                   │             │             │             │
-                    Canary Traffic │             │ Shadow Copy │             │
-                                   ▼             │             ▼             │
-             ┌───────────────────────────┐       │      ┌──────────────┐     │
-             │   Model Serving Runtimes  │       │      │   RabbitMQ   │     │
-             │                           │       │      │ (Port 15672) │     │
-             │  ┌─────────────────────┐  │       │      └──────┬───────┘     │
-             │  │   Champion Model    │  │       │             │             │
-             │  │   (Random Forest)   │  │       │             ▼             │
-             │  └─────────────────────┘  │       │      ┌──────────────┐     │
-             │  ┌─────────────────────┐  │       │      │ Shadow Queue │     │
-             │  │   Candidate Model   │  │       │      │    Worker    │     │
-             │  │ (Gradient Boosting) │  │       │      └──────┬───────┘     │
-             │  └─────────────────────┘  │       │             │             │
-             └─────────────┬─────────────┘       │             │             │
-                           │                     ▼             ▼             │
-                           │           ┌───────────────────────────────┐     │
-                           │           │      PostgreSQL (Port 5433)   │     │
-                           │           │  - Predictions & Feedback     │     │
-                           │           │  - Comparisons & Audit Trail  │     │
-                           │           └───────────────────────────────┘     │
-                           ▼                                                 ▼
-             ┌───────────────────────────┐                     ┌───────────────────────────┐
-             │     MLflow Model Store    │                     │  Prometheus (9090) and    │
-             │        (Port 5001)        │                     │   Grafana (Port 3001)     │
-             └───────────────────────────┘                     └───────────────────────────┘
+```mermaid
+flowchart LR
+  UI[Next.js UI :3000] --> N[Nginx :8080]
+  N --> A[Control API :8000]
+  A --> C[Champion]
+  A --> K[Candidate]
+  A <--> D[(PostgreSQL)]
+  A -->|durable outbox dispatcher| Q[RabbitMQ]
+  Q --> W[Worker]
+  W --> K
+  W --> D
+  M[MLflow model registry :5001] --> C
+  M --> K
 ```
 
----
+The API port is internal to Docker. Browser requests use the Next.js rewrite and
+Nginx. PostgreSQL stores application evidence; MLflow uses its own persistent
+tracking/artifact volume. Metrics are JSON API data shown in the operator UI.
 
-## 📦 Services and Components
+## Start locally
 
-| Service | Directory | Technology | Host Port | Description |
-| :--- | :--- | :--- | :--- | :--- |
-| **Frontend** | `frontend/` | Next.js 16, React 19, Bun | `3000` | Real-time operator dashboard to monitor rollouts, accuracy, and audit trails |
-| **Control API** | `backend/control_api/` | FastAPI, Python 3.12, Uvicorn | `8000` | Gateway performing deterministic client routing, delayed feedback recording, and safety decisions |
-| **Model Serving** | `backend/model_serving/` | FastAPI, Scikit-learn, Joblib | Internal | Version-pinned runtimes serving Champion (v1) and Candidate (v2) with fault injection support |
-| **Shadow Worker**| `backend/worker/` | Python 3.12, HTTPX, Pika | Internal | Consumes shadow queue tasks, runs candidate inference asynchronously, records comparisons |
-| **ML Pipeline** | `backend/ml/` | Scikit-learn, MLflow, DVC | N/A | Reproducible Wine dataset training script logging metrics & registering versioned models |
-| **PostgreSQL** | Docker | Postgres 16 Alpine | `5433` | Persistence for predictions, delayed ground-truth feedback, comparisons, and audit log |
-| **RabbitMQ** | Docker | RabbitMQ 3 Management Alpine | `15672` | Message broker decoupling user predictions from shadow candidate inference |
-| **MLflow** | `infra/mlflow/` | MLflow 2.15 | `5001` | Artifact and model registry tracking experiments and artifact versions |
-| **Prometheus** | Docker | Prometheus v3 | `9090` | Timeseries scraper pulling application metrics from `/metrics` |
-| **Grafana** | `infra/grafana/` | Grafana 11 | `3001` | Pre-provisioned dashboards visualizing traffic rate, latency, error spikes, and canary share |
+Requires Docker Desktop, Bun, and Python 3.12 with uv. Python service images and
+local training use committed uv lockfiles.
 
----
+1. Copy `.env.example` to `.env`. Supply PostgreSQL and RabbitMQ passwords; keep
+   `.env` out of Git. Passwords are read from environment variables.
+2. Start infrastructure and register models:
 
-## 🚦 Release Policy & Decision Rules
+   ```sh
+   make infrastructure
+   make train
+   ```
 
-The Release Decision Engine evaluates live health every request and makes one of 3 autonomous decisions:
+   Training connects to `http://localhost:5001`, uses a reproducible stratified
+   train/test split, logs held-out accuracy/F1, and registers both models. It writes
+   their exact numbered identities to `backend/ml/models/versions.env` and the
+   held-out inputs with true labels to `backend/ml/models/evaluation.json`.
+   Registration failures stop training; no replacement model is trained by serving.
+3. Start the API, serving containers, worker, and Nginx:
 
-1. **HOLD (Insufficient Evidence):**
-   - Less than **20 predictions or labels** collected.
-   - Traffic allocation remains frozen while data accumulates.
-2. **ROLLBACK (Safety or Performance Breach):**
-   - Automatically triggered if **Candidate Error Rate > 5%**, OR
-   - **Candidate p95 Latency > 200 ms**, OR
-   - **Candidate Accuracy drops > 5% below Champion**.
-   - Instantly resets traffic to **0% Candidate** (100% Champion fallback) and creates an immutable audit record.
-3. **PROMOTE (Safe & Confirmed Superiority):**
-   - Triggered when minimum sample thresholds are satisfied, latency and error rates are healthy, and Candidate accuracy meets or exceeds Champion.
-   - Candidate transitions to **100% traffic** and becomes the new baseline.
+   ```sh
+   make stack
+   bun install
+   bun run dev
+   ```
 
----
+   `make stack` reads `.env` and then the generated version file. Re-run it after
+   training to recreate containers with the new identities. It never removes data
+   volumes. `make stop` stops the containers while retaining stored data.
+4. Open the operator UI at http://localhost:3000. MLflow is at
+   http://localhost:5001 and RabbitMQ management is at http://localhost:15672.
+   PostgreSQL is published on localhost:5433 for local administration.
 
-## 🚀 Quickstart Guide
+The UI uses `MODEL_ARENA_API_URL` for its server-side gateway rewrite, defaulting
+to `http://127.0.0.1:8080`. Set it in `frontend/.env.local` when changing the gateway.
+An optional `NEXT_PUBLIC_MLFLOW_URL` controls the registry link.
 
-### 1. Prerequisites
-- **Docker & Docker Compose** (Desktop running)
-- **Bun** (for Next.js frontend: `curl -fsSL https://bun.sh/install | bash`)
-- **Python 3.12** (managed with `uv`)
+## Release behavior
 
-### 2. Environment Setup
-```bash
-# Copy template and fill passwords
-cp .env.example .env
+- **READY:** Champion serves requests. Both configured models must report matching
+  identities before SHADOW or the initial canary probe can start.
+- **SHADOW:** Champion serves all requests. Its prediction and shadow event commit
+  together in PostgreSQL. A dispatcher retries publication until RabbitMQ confirms
+  acceptance; the worker commits one comparison per prediction before acknowledging.
+  Duplicate publication/delivery is safe. Agreement is separate from accuracy.
+- **CANARY:** Requests are assigned deterministically using evaluation ID and client
+  ID. The probe starts at 10%; subsequent steps are 25%, 50%, and 100%.
+- **PROMOTED:** Candidate serves all traffic and remains monitored for safety.
+- **ROLLED_BACK:** Champion serves all traffic. Start a new evaluation to retry.
+
+The API automatically evaluates active stages every five seconds. Operator
+`Evaluate now` and `Advance with evidence` use the same policy and row locks.
+Each stage needs at least 20 Candidate requests. Error rate above 5% or Candidate
+p95 above 200 ms causes rollback. Advancement additionally needs 20 genuine labels
+for each model and Candidate accuracy no more than five percentage points below
+Champion. Missing labels mean HOLD, never assumed 100% accuracy. Promotion retains
+prior evaluation labels as the Champion reference while monitoring new live traffic.
+
+Starting a new evaluation preserves old predictions, feedback, audit records, and
+pending outbox tasks. Counts and decisions are scoped to the active evaluation,
+configured model identities, and (for progression) the current stage. Inference
+failures return HTTP errors with a null prediction and remain visible as failures.
+The API rejects feedback for unsuccessful inferences.
+
+## API
+
+All application endpoints are available through `http://localhost:8080/api/v1`:
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /predict` | 13 finite Wine features and optional client ID; returns request ID, model identity, prediction, and latency |
+| `POST /feedback` | Immutable first label: `prediction_id` and `ground_truth_label` (0, 1, or 2) |
+| `GET /models` | Expected/loaded identities and readiness of both model servers |
+| `GET /metrics` | Evaluation request counts, latency, error rate, and genuine labeled accuracies |
+| `GET /shadow/summary` | Completed comparisons, agreement, and pending outbox tasks |
+| `GET /predictions/recent` | Recent successful and failed requests in this evaluation |
+| `GET /audit` | Historical release events |
+| `GET /rollouts/active` | Current state and traffic split |
+| `POST /rollouts/shadow` | Enter SHADOW from READY |
+| `POST /rollouts/advance` | Start the 10% probe or advance one evidence-approved step; accepts `{}` |
+| `POST /rollouts/evaluate` | Evaluate and apply the policy now |
+| `POST /rollouts/rollback` | Restore Champion traffic; accepts a reason |
+| `POST /rollouts/reset` | Start a new evaluation without deleting history |
+
+Example:
+
+```sh
+curl http://localhost:8080/api/v1/predict -H 'Content-Type: application/json' \
+  -d '{"client_id":"operator","features":[13.2,1.78,2.14,11.2,100,2.65,2.76,0.26,1.28,4.38,1.05,3.4,1050]}'
 ```
 
-### 3. Start Core Services
-```bash
-# Start all containers in background
-docker compose --profile serving --profile observability up --build -d
-```
-*(Or use shortcut `make stack-full`)*
+## Demonstrations
 
-### 4. Start Next.js Frontend
-```bash
-bun install
-bun run dev
-```
-Open [http://localhost:3000](http://localhost:3000) in your browser.
+Run after training and starting the stack:
 
----
-
-## 📡 Key Endpoints & Usage
-
-### 1. Predict (Inference Gateway)
-```bash
-curl -X POST http://localhost:8000/api/v1/predict \
-  -H "Content-Type: application/json" \
-  -d '{
-    "client_id": "user-42",
-    "features": [13.2, 1.78, 2.14, 11.2, 100.0, 2.65, 2.76, 0.26, 1.28, 4.38, 1.05, 3.4, 1050.0]
-  }'
-```
-Response:
-```json
-{
-  "request_id": "18f92b77-...",
-  "prediction": 0,
-  "served_by": "candidate",
-  "probabilities": [0.94, 0.04, 0.02]
-}
+```sh
+uv run --with httpx python scripts/demo_shadow_mode.py
+uv run --with httpx python scripts/demo_gradual_rollout.py
 ```
 
-### 2. Submit Ground-Truth Feedback
-```bash
-curl -X POST http://localhost:8000/api/v1/feedback \
-  -H "Content-Type: application/json" \
-  -d '{
-    "prediction_id": "18f92b77-...",
-    "ground_truth_label": 0
-  }'
-```
+Demos use exported held-out labels. The gradual demo reports the actual policy
+outcome, which can be HOLD or rollback if the Candidate is worse. It does not
+manufacture correct labels or guarantee promotion.
 
-### 3. Advance Rollout (Canary Traffic Step)
-```bash
-curl -X POST http://localhost:8000/api/v1/rollouts/advance \
-  -H "Content-Type: application/json" \
-  -d '{"target_canary_percentage": 25.0}'
-```
+For the opt-in fault demo, set `ENABLE_DEMO_FAULTS=true` when starting/recreating
+containers, then run `uv run --with httpx python scripts/demo_traffic.py`. Faults
+apply only to naturally selected Candidate requests in CANARY. They cannot force
+routing or affect SHADOW Champion responses. Disable the flag afterward.
 
-### 4. Trigger Instant Rollback
-```bash
-curl -X POST http://localhost:8000/api/v1/rollouts/rollback \
-  -H "Content-Type: application/json" \
-  -d '{"reason": "Manual operator intervention or regression detected"}'
-```
+## Verification
 
----
+`make test` runs service tests and TypeScript checking. `bun run build` checks the
+production frontend (`cd frontend && bun run build --webpack` is also supported).
+Optional API integration tests require `TEST_DATABASE_URL`
+and `TEST_RABBITMQ_URL` pointing to disposable services. They isolate PostgreSQL
+schemas, but use fixed RabbitMQ queue names; do not use an application vhost.
 
-## 🧪 Running Automated Tests
-
-```bash
-# Control API routing and decision engine unit tests
-uv run pytest backend/control_api/tests/test_routing_and_decisions.py -v
-
-# Model Serving verification tests
-uv run pytest backend/model_serving/tests/test_serving.py -v
-
-# Worker queue tests
-uv run pytest backend/worker/tests/test_consumer.py -v
-```
-
----
-
-## 🎬 Live Demonstration Scripts
-
-We provide two end-to-end Python demo scripts in `scripts/`:
-
-```bash
-# 1. Gradual Rollout Happy Path (5% -> 15% -> 50% -> 100% Full Promotion)
-uv run --with httpx python3 scripts/demo_gradual_rollout.py
-
-# 2. Safety & Fault Injection Auto-Rollback (Triggers 500 errors and auto-rollback)
-uv run --with httpx python3 scripts/demo_traffic.py
-```
-
----
-
-## 📖 In-Depth Project Documentation
-
-For a comprehensive A-to-Z explanation of every design decision, mathematical formula, Grafana panel interpretation, and the exact oral presentation walkthrough for tomorrow's demo, see:
-👉 **[PROJECT_EXPLAINED.md](PROJECT_EXPLAINED.md)**
+Startup creates missing tables and idempotently upgrades the prediction column to
+allow null for failed inference, preserving existing rows. Delivery requires the
+PostgreSQL and RabbitMQ volumes to be retained. Failed worker tasks are parked in
+`shadow_tasks.failed` and need replay after the cause is fixed. The application is
+intended for a local operator environment; do not expose administration or demo
+controls publicly without access controls.

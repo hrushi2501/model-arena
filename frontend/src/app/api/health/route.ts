@@ -1,11 +1,7 @@
 import { NextResponse } from "next/server";
 
 export async function GET() {
-  const apiUrl = process.env.MODEL_ARENA_API_URL;
-
-  if (!apiUrl) {
-    return NextResponse.json({ status: "not_configured" }, { status: 503 });
-  }
+  const apiUrl = process.env.MODEL_ARENA_API_URL || "http://127.0.0.1:8080";
 
   try {
     const response = await fetch(new URL("/health/live", apiUrl), { cache: "no-store" });

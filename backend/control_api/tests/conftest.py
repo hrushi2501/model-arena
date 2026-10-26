@@ -7,6 +7,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.db.session import Base, get_db
+from app.db.models import Rollout
 from app.main import app
 
 
@@ -36,6 +37,8 @@ def database():
     )
     Base.metadata.create_all(engine)
     sessions = sessionmaker(bind=engine)
+    with sessions.begin() as db:
+        db.add(Rollout())
     old_override = app.dependency_overrides.get(get_db)
 
     def dependency():

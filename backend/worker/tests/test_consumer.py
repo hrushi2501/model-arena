@@ -39,7 +39,13 @@ def http_client(monkeypatch, response=None, error=None):
     client.post.side_effect = error
     client.post.return_value = httpx.Response(
         200,
-        json=response if response is not None else {"prediction": 0},
+        json=response
+        if response is not None
+        else {
+            "prediction": 0,
+            "model_role": "candidate",
+            "model_version": "models:/wine-classifier/2",
+        },
         request=httpx.Request("POST", "http://model-candidate:8000/predict"),
     )
     monkeypatch.setattr(consumer.httpx, "Client", Mock(return_value=client))
@@ -195,3 +201,15 @@ def test_candidate_http_failures_are_not_recorded(message, monkeypatch, store, s
     consumer.process_shadow_task(*message)
     store.save.assert_not_called()
     assert channel.basic_publish.call_args.kwargs["routing_key"] == "shadow_tasks"
+
+
+@pytest.mark.parametrize(
+    "role,version",
+    [("champion", "models:/wine-classifier/2"), ("candidate", "models:/wine-classifier/99")],
+)
+def test_wrong_candidate_identity_is_never_persisted(message, monkeypatch, store, role, version):
+    http_client(
+        monkeypatch, response={"prediction": 1, "model_role": role, "model_version": version}
+    )
+    consumer.process_shadow_task(*message)
+    store.save.assert_not_called()

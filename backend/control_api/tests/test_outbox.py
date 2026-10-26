@@ -19,7 +19,7 @@ def seed_event(sessions, prediction_id="pred-1"):
     payload = json.dumps(
         {
             "request_id": prediction_id,
-            "features": [1.0],
+            "features": [1.0] * 13,
             "champion_pred": 1,
             "candidate_url": routes.CANDIDATE_URL,
         }
@@ -41,7 +41,7 @@ def test_prediction_and_outbox_roll_back_together(database, monkeypatch, table):
     with sessions.begin() as db:
         db.add(Rollout(state="SHADOW"))
 
-    async def forward(*args):
+    async def forward(*args, **kwargs):
         return {"prediction": 1, "latency_ms": 1.0}
 
     monkeypatch.setattr(routes, "forward_prediction", forward)
@@ -53,7 +53,7 @@ def test_prediction_and_outbox_roll_back_together(database, monkeypatch, table):
     event.listen(engine, "before_cursor_execute", fail_insert)
     try:
         with pytest.raises(OperationalError):
-            TestClient(app).post("/api/v1/predict", json={"features": [1.0]})
+            TestClient(app).post("/api/v1/predict", json={"features": [1.0] * 13})
     finally:
         event.remove(engine, "before_cursor_execute", fail_insert)
     with sessions() as db:

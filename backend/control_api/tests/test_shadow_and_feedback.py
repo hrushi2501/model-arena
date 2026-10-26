@@ -28,7 +28,7 @@ def add_prediction(sessions, prediction_id="pred-1", role="champion", label=1):
         db.add(
             Prediction(
                 id=prediction_id,
-                selected_version="models:/wine/1",
+                selected_version=f"models:/wine-classifier/{1 if role == 'champion' else 2}",
                 selected_role=role,
                 prediction=label,
                 latency_ms=1.0,
@@ -113,7 +113,7 @@ def test_shadow_event_is_durable_without_publishing_on_request(
         db.commit()
     events = []
 
-    async def forward(role, target_url, features, selected_version):
+    async def forward(role, target_url, features, selected_version, **kwargs):
         events.append(role)
         if transition_during_inference:
             with sessions() as db:
@@ -138,7 +138,7 @@ def test_shadow_event_is_durable_without_publishing_on_request(
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=observed_app), base_url="http://test"
         ) as client:
-            return await client.post("/api/v1/predict", json={"features": [1.0, 2.0]})
+            return await client.post("/api/v1/predict", json={"features": [1.0] * 13})
 
     result = asyncio.run(request())
     assert result.status_code == 200
@@ -150,9 +150,10 @@ def test_shadow_event_is_durable_without_publishing_on_request(
             assert result.json()["model_role"] == "champion"
             assert json.loads(pending.payload_json) == {
                 "request_id": result.json()["request_id"],
-                "features": [1.0, 2.0],
+                "features": [1.0] * 13,
                 "champion_pred": 1,
                 "candidate_url": routes.CANDIDATE_URL,
+                "candidate_version": "models:/wine-classifier/2",
             }
 
 

@@ -25,7 +25,7 @@ def test_feedback_and_worker_races_do_not_double_count(postgres):
             [
                 Prediction(
                     id=f"pred-{i}",
-                    selected_version="models:/wine/1",
+                    selected_version="models:/wine-classifier/1",
                     selected_role="champion",
                     prediction=1,
                     latency_ms=1,
@@ -133,3 +133,62 @@ def test_process_death_releases_outbox_claim(postgres, process_environment, monk
         time.sleep(0.01)
     with sessions() as db:
         assert db.query(ShadowOutbox).count() == 0
+
+
+def test_concurrent_policy_checks_do_not_double_advance(postgres, monkeypatch):
+    from app.db.models import AuditEvent, Rollout
+    from app.services import decision_engine
+    from tests.test_release_safety import evidence
+
+    _, sessions = postgres
+    with sessions.begin() as db:
+        db.add(Rollout())
+    evidence(sessions)
+    claimed, release = threading.Event(), threading.Event()
+    original = decision_engine.evaluate_rollout
+
+    def evaluate(db, rollout):
+        claimed.set()
+        assert release.wait(timeout=10)
+        return original(db, rollout)
+
+    monkeypatch.setattr(decision_engine, "evaluate_rollout", evaluate)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(decision_engine.monitor_once, sessions)
+        try:
+            assert claimed.wait(timeout=3)
+            executor.submit(decision_engine.monitor_once, sessions).result(timeout=3)
+        finally:
+            release.set()
+        first.result(timeout=3)
+    with sessions() as db:
+        assert db.query(Rollout).first().canary_percentage == 0.25
+        assert db.query(AuditEvent).count() == 1
+
+
+def test_postgres_nullable_prediction_upgrade_preserves_rows(postgres):
+    from sqlalchemy import text
+
+    from app.db.migrate import initialize_schema
+
+    engine, sessions = postgres
+    with sessions.begin() as db:
+        db.add(Prediction(id="retained", selected_role="champion", selected_version="models:/wine-classifier/1", prediction=1, latency_ms=1))
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE predictions ALTER COLUMN prediction SET NOT NULL"))
+    initialize_schema(engine)
+    initialize_schema(engine)
+    with sessions.begin() as db:
+        db.add(
+            Prediction(
+                id="failed",
+                selected_role="champion",
+                selected_version="models:/wine-classifier/1",
+                prediction=None,
+                status_code=503,
+                latency_ms=1,
+            )
+        )
+    with sessions() as db:
+        assert db.get(Prediction, "failed").prediction is None
+        assert db.get(Prediction, "retained").prediction == 1

@@ -1,20 +1,14 @@
 {
   "champion": {
-    "model_type": "random_forest",
     "accuracy": 1.0,
     "macro_f1": 1.0,
-    "n_estimators": 100
+    "model_type": "RandomForestClassifier",
+    "model_uri": "models:/wine-classifier/1"
   },
   "candidate": {
-    "model_type": "gradient_boosting",
-    "accuracy": 0.9444,
-    "macro_f1": 0.9453,
-    "n_estimators": 100
-  },
-  "dataset": {
-    "name": "wine",
-    "train_samples": 142,
-    "test_samples": 36,
-    "features_count": 13
+    "accuracy": 0.9444444444444444,
+    "macro_f1": 0.9453132832080201,
+    "model_type": "GradientBoostingClassifier",
+    "model_uri": "models:/wine-classifier/2"
   }
 }

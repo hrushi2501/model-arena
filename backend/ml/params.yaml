@@ -1,17 +1,10 @@
 dataset:
   name: wine
   test_size: 0.2
-  val_size: 0.2
-  train_size: 0.6
-  stratify: true
   random_state: 42
-
 champion:
-  model_type: random_forest
   n_estimators: 100
   random_state: 42
-
 candidate:
-  model_type: gradient_boosting
   n_estimators: 100
   random_state: 42

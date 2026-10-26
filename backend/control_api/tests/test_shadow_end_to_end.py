@@ -36,7 +36,18 @@ def model_server(request):
             self.send_response(503 if len(requests) <= candidate_failures else 200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(b'{"prediction": 0}')
+            role = "champion" if self.path.startswith("/champion") else "candidate"
+            self.wfile.write(
+                json.dumps(
+                    {
+                        "prediction": 0,
+                        "probabilities": [1.0, 0.0, 0.0],
+                        "model_role": role,
+                        "model_version": "models:/wine-classifier/"
+                        + ("1" if role == "champion" else "2"),
+                    }
+                ).encode()
+            )
 
         def log_message(self, *args):
             pass
@@ -66,7 +77,7 @@ def test_broker_worker_database_and_delayed_feedback(
         db.add(
             Prediction(
                 id=prediction_id,
-                selected_version="models:/test/1",
+                selected_version="models:/wine-classifier/1",
                 selected_role="champion",
                 prediction=1,
                 latency_ms=1.0,
@@ -95,7 +106,7 @@ def test_broker_worker_database_and_delayed_feedback(
     payload = json.dumps(
         {
             "request_id": prediction_id,
-            "features": [1.0, 2.0],
+            "features": [1.0] * 13,
             "champion_pred": 1,
             "candidate_url": candidate_url,
         }
@@ -143,7 +154,7 @@ def test_broker_worker_database_and_delayed_feedback(
             time.sleep(0.05)
         else:
             pytest.fail("Malformed task was not parked")
-        assert requests == [("/predict", {"features": [1.0, 2.0]})] * (candidate_failures + 1)
+        assert requests == [("/predict", {"features": [1.0] * 13})] * (candidate_failures + 1)
         with sessions() as db:
             assert db.query(ModelComparison).count() == 1
             accuracy = accuracy_summary(db)
@@ -207,14 +218,14 @@ def test_outbox_survives_broker_outage_and_api_kill(postgres, process_environmen
     env = {
         **process_environment,
         "RABBITMQ_URL": rabbit_url,
-        "CHAMPION_URL": model_url,
+        "CHAMPION_URL": model_url.rsplit("/", 1)[0] + "/champion/predict",
         "CANDIDATE_URL": model_url,
     }
     with sessions.begin() as db:
         db.add(Rollout(state="SHADOW"))
     # Port 1 has no broker: the real dispatcher fails while inference still succeeds.
     with running_api({**env, "RABBITMQ_URL": "amqp://127.0.0.1:1/"}) as (api, client):
-        response = client.post("/api/v1/predict", json={"features": [1.0, 2.0]})
+        response = client.post("/api/v1/predict", json={"features": [1.0] * 13})
         assert response.status_code == 200
         prediction_id = response.json()["request_id"]
         deadline = time.monotonic() + 5

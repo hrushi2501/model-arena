@@ -1,153 +1,95 @@
-import logging
-import os
-from contextlib import asynccontextmanager
-from pathlib import Path
-from typing import Any
+"""Serve exactly one numbered MLflow model version; no synthetic or retrained fallback."""
 
-import joblib
+import os
+import re
+from contextlib import asynccontextmanager
+from typing import Literal
+
+import mlflow
+import mlflow.sklearn
 import numpy as np
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, FiniteFloat
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-logger = logging.getLogger("model_server")
-
-MODEL_ROLE = os.getenv("MODEL_ROLE", "champion").lower()
-DEFAULT_URI = "models:/wine-classifier/1" if MODEL_ROLE == "champion" else "models:/wine-classifier/2"
-MODEL_URI = os.getenv("MODEL_URI") or DEFAULT_URI
-MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000")
-
-# Global reference to loaded model
-loaded_model: Any = None
+MODEL_ROLE = os.getenv("MODEL_ROLE", "champion")
+MODEL_URI = os.getenv(
+    "MODEL_URI",
+    "models:/wine-classifier/1" if MODEL_ROLE == "champion" else "models:/wine-classifier/2",
+)
+loaded_model = None
 
 
 def load_model_instance():
-    """
-    Attempts to load model from MLflow registry;
-    falls back gracefully to local serialized joblib model or on-the-fly Wine model.
-    """
     global loaded_model
-
-    # 1. Attempt MLflow pyfunc loading
+    loaded_model = None
+    if MODEL_ROLE not in ("champion", "candidate") or not re.fullmatch(
+        r"models:/[^/@]+/[1-9][0-9]*", MODEL_URI
+    ):
+        raise ValueError("Configure a role and a concrete numbered MLflow model URI")
+    mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000"))
     try:
-        import mlflow.pyfunc
-
-        mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
-        logger.info(f"Attempting to load model from MLflow: {MODEL_URI} ({MLFLOW_TRACKING_URI})")
-        loaded_model = mlflow.pyfunc.load_model(MODEL_URI)
-        logger.info(f"Successfully loaded model from MLflow: {MODEL_URI}")
-        return loaded_model
-    except Exception as exc:
-        logger.info(f"MLflow load unsuccessful ({exc}); checking local serialized joblib models.")
-
-    # 2. Attempt local .joblib loading
-    base_dir = Path(__file__).resolve().parent
-    candidate_paths = [
-        base_dir / "models" / f"{MODEL_ROLE}.joblib",
-        base_dir.parent / "models" / f"{MODEL_ROLE}.joblib",
-        base_dir.parent.parent / "ml" / "models" / f"{MODEL_ROLE}.joblib",
-    ]
-
-    for p in candidate_paths:
-        if p.exists():
-            try:
-                loaded_model = joblib.load(p)
-                logger.info(f"Successfully loaded local model from {p}")
-                return loaded_model
-            except Exception as e:
-                logger.warning(f"Failed to load {p}: {e}")
-
-    # 3. Fallback: Quick in-memory Scikit-learn Wine classifier
-    logger.info("Training lightweight in-memory fallback classifier on Wine dataset...")
-    from sklearn.datasets import load_wine
-    from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
-
-    wine = load_wine()
-    if MODEL_ROLE == "candidate":
-        model = GradientBoostingClassifier(n_estimators=50, random_state=42)
-    else:
-        model = RandomForestClassifier(n_estimators=50, random_state=42)
-    model.fit(wine.data, wine.target)
-    loaded_model = model
-    logger.info(f"Fallback model trained and ready for role: {MODEL_ROLE}")
+        loaded_model = mlflow.sklearn.load_model(MODEL_URI)
+    except Exception as exc:  # noqa: BLE001 - loading failures must stop startup without exposing credentials
+        raise RuntimeError(f"Registered model could not be loaded ({type(exc).__name__})") from None
     return loaded_model
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app):
     load_model_instance()
     yield
 
 
-app = FastAPI(
-    title=f"Model Arena Model Server ({MODEL_ROLE})",
-    description="Loads and serves one explicitly configured model version for Wine classification.",
-    version="0.1.0",
-    lifespan=lifespan,
-)
+app = FastAPI(title=f"Model Arena {MODEL_ROLE}", lifespan=lifespan)
 
 
 class PredictRequest(BaseModel):
-    features: list[float] = Field(..., description="List of feature values (13 features for Wine dataset)")
-    inject_fault: bool = Field(False, description="Fault injection toggle for automated rollback demonstration")
+    features: list[FiniteFloat] = Field(min_length=13, max_length=13)
+    inject_fault: bool = False
 
 
 class PredictResponse(BaseModel):
     prediction: int
-    probabilities: list[float] | None = None
+    probabilities: list[float] | None
     model_version: str
-    model_role: str
+    model_role: Literal["champion", "candidate"]
 
 
-@app.get("/health/live", tags=["health"])
-def liveness() -> dict[str, str]:
-    """Confirm that the model-server process is running."""
+@app.get("/health/live")
+def liveness():
     return {"status": "alive"}
 
 
-@app.get("/health/ready", tags=["health"])
-def readiness() -> dict[str, Any]:
-    """Confirm that the model is loaded and ready to serve inferences."""
+@app.get("/health/ready")
+def readiness():
+    if loaded_model is None:
+        raise HTTPException(503, "Configured model is not loaded")
     return {
-        "ready": loaded_model is not None,
+        "ready": True,
         "model_role": MODEL_ROLE,
         "model_version": MODEL_URI,
+        "model_type": type(loaded_model).__name__,
     }
 
 
-@app.post("/predict", response_model=PredictResponse, tags=["inference"])
+@app.post("/predict", response_model=PredictResponse)
 def predict(request: PredictRequest):
-    """
-    Executes model inference on incoming feature vector.
-    Supports deliberate fault injection for rollback testing.
-    """
     if request.inject_fault:
-        logger.warning(f"Fault injected on {MODEL_ROLE} ({MODEL_URI}); raising HTTP 500 error.")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Injected fault error on {MODEL_ROLE} for automated rollback demonstration",
-        )
-
-    model = loaded_model or load_model_instance()
-    if model is None:
-        raise HTTPException(status_code=503, detail="Model is not yet loaded")
-
-    features = np.array(request.features, dtype=float).reshape(1, -1)
-
+        if os.getenv("ENABLE_DEMO_FAULTS", "false").lower() != "true" or MODEL_ROLE != "candidate":
+            raise HTTPException(403, "Demo faults are disabled for this server")
+        raise HTTPException(500, "Injected Candidate fault")
+    if loaded_model is None:
+        raise HTTPException(503, "Configured model is not loaded")
+    features = np.asarray(request.features).reshape(1, -1)
     try:
-        # Check predict_proba
-        probabilities = None
-        if hasattr(model, "predict_proba"):
-            raw_probs = model.predict_proba(features)[0]
-            probabilities = [round(float(p), 4) for p in raw_probs]
-
-        # Check predict
-        pred_val = model.predict(features)[0]
-        prediction = int(pred_val)
-    except Exception as e:
-        logger.error(f"Inference computation error: {e}")
-        raise HTTPException(status_code=400, detail=f"Inference error: {str(e)}")
-
+        prediction = int(loaded_model.predict(features)[0])
+        probabilities = (
+            loaded_model.predict_proba(features)[0].tolist()
+            if hasattr(loaded_model, "predict_proba")
+            else None
+        )
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Invalid model input") from None
     return PredictResponse(
         prediction=prediction,
         probabilities=probabilities,

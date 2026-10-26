@@ -4,6 +4,7 @@ import logging
 import os
 import time
 from functools import lru_cache
+from typing import Literal
 
 import httpx
 import pika
@@ -25,10 +26,13 @@ class ShadowTask(BaseModel):
     features: list[FiniteFloat]
     champion_pred: int = Field(strict=True)
     candidate_url: str
+    candidate_version: str | None = Field(None, pattern=r"^models:/[^/@]+/[1-9][0-9]*$")
 
 
 class CandidateResult(BaseModel):
-    prediction: int = Field(strict=True)
+    prediction: int = Field(strict=True, ge=0, le=2)
+    model_role: Literal["candidate"]
+    model_version: str
 
 
 @lru_cache(maxsize=1)
@@ -99,7 +103,13 @@ def process_shadow_task(ch, method, properties, body):
         with httpx.Client(timeout=5.0, follow_redirects=False) as client:
             response = client.post(task.candidate_url, json={"features": task.features})
             response.raise_for_status()
-            candidate_pred = CandidateResult.model_validate(response.json()).prediction
+            result = CandidateResult.model_validate(response.json())
+            expected = task.candidate_version or os.getenv(
+                "CANDIDATE_MODEL_URI", "models:/wine-classifier/2"
+            )
+            if result.model_version != expected:
+                raise ValueError("Candidate model version mismatch")
+            candidate_pred = result.prediction
         store.save(task, candidate_pred)
     except (httpx.HTTPError, ValueError, SQLAlchemyError) as exc:
         # Exception text can expose database DSNs or private input values.

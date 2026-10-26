@@ -1,103 +1,39 @@
-import { AuditEvent, RolloutInfo } from "./types";
+import type { Dashboard, PredictionResult, RolloutInfo } from "./types";
 
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_CONTROL_API_URL || "http://localhost:8080";
-
-export async function checkApiHealth(): Promise<boolean> {
-  try {
-    const res = await fetch(`${API_BASE_URL}/health/live`, {
-      method: "GET",
-      cache: "no-store",
-      headers: { Accept: "application/json" },
-    });
-    return res.ok;
-  } catch {
-    return false;
-  }
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number) { super(message); }
 }
 
-export async function getActiveRollout(): Promise<RolloutInfo | null> {
-  try {
-    const res = await fetch(`${API_BASE_URL}/api/v1/rollouts/active`, {
-      method: "GET",
-      cache: "no-store",
-      headers: { Accept: "application/json" },
-    });
-    if (!res.ok) {
-      return null;
-    }
-    return await res.json();
-  } catch {
-    return null;
+async function request<T>(path: string, body?: unknown): Promise<T> {
+  const response = await fetch(`/api/v1${path}`, {
+    method: body === undefined ? "GET" : "POST",
+    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    cache: "no-store", signal: AbortSignal.timeout(5000),
+  });
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    const detail = typeof data?.detail === "string" ? data.detail : data?.error;
+    throw new ApiError(detail || `Request failed (HTTP ${response.status})`, response.status);
   }
+  return data as T;
 }
 
-export async function advanceRollout(): Promise<{ success: boolean; message: string }> {
-  try {
-    const res = await fetch(`${API_BASE_URL}/api/v1/rollouts/advance`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-    });
-    if (res.ok) {
-      const data = await res.json().catch(() => ({}));
-      return { success: true, message: data.message || "Rollout advanced successfully" };
-    }
-    const err = await res.text().catch(() => "Unknown error");
-    return { success: false, message: `Failed to advance: ${err}` };
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Network error";
-    return { success: false, message };
-  }
+export async function getDashboard(): Promise<Dashboard> {
+  const [rollout, metrics, shadow, audit, predictions, models] = await Promise.all([
+    request<Dashboard["rollout"]>("/rollouts/active"), request<Dashboard["metrics"]>("/metrics"),
+    request<Dashboard["shadow"]>("/shadow/summary"), request<Dashboard["audit"]>("/audit"),
+    request<Dashboard["predictions"]>("/predictions/recent"), request<Dashboard["models"]>("/models"),
+  ]);
+  return { rollout, metrics, shadow, audit, predictions, models };
 }
 
-export async function rollbackRollout(reason = "Manual operator intervention"): Promise<{ success: boolean; message: string }> {
-  try {
-    const res = await fetch(`${API_BASE_URL}/api/v1/rollouts/rollback`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reason }),
-    });
-    if (res.ok) {
-      const data = await res.json().catch(() => ({}));
-      return { success: true, message: data.message || "Rollback initiated successfully" };
-    }
-    const err = await res.text().catch(() => "Unknown error");
-    return { success: false, message: `Failed to rollback: ${err}` };
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Network error";
-    return { success: false, message };
-  }
-}
+export const changeRollout = (action: "shadow" | "advance" | "rollback" | "reset" | "evaluate") =>
+  request<RolloutInfo & { decision?: string; reason?: string }>(`/rollouts/${action}`,
+    action === "rollback" ? { reason: "Manual operator rollback" } : {});
 
-export async function getAuditEvents(): Promise<AuditEvent[]> {
-  try {
-    const res = await fetch(`${API_BASE_URL}/api/v1/audit`, {
-      method: "GET",
-      cache: "no-store",
-      headers: { Accept: "application/json" },
-    });
-    if (!res.ok) {
-      return [];
-    }
-    const data = await res.json();
-    return Array.isArray(data) ? data : data.events || [];
-  } catch {
-    return [];
-  }
-}
+export const predict = (features: number[], client_id: string) =>
+  request<PredictionResult>("/predict", { features, client_id });
 
-export async function getRecentPredictions(): Promise<import("./types").RecentPrediction[]> {
-  try {
-    const res = await fetch(`${API_BASE_URL}/api/v1/predictions/recent`, {
-      method: "GET",
-      cache: "no-store",
-      headers: { Accept: "application/json" },
-    });
-    if (!res.ok) {
-      return [];
-    }
-    return await res.json();
-  } catch {
-    return [];
-  }
-}
+export const feedback = (prediction_id: string, ground_truth_label: number) =>
+  request("/feedback", { prediction_id, ground_truth_label });

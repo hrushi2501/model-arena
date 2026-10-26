@@ -1,4 +1,7 @@
-.PHONY: install dev stack stack-full stop
+.PHONY: install dev infrastructure train stack stack-full stop test
+
+MODEL_ENV = $(if $(wildcard backend/ml/models/versions.env),--env-file backend/ml/models/versions.env,)
+COMPOSE = docker compose --env-file .env $(MODEL_ENV)
 
 install:
 	bun install
@@ -6,11 +9,23 @@ install:
 dev:
 	bun run dev
 
-stack:
-	docker compose up --build
+infrastructure:
+	$(COMPOSE) up -d --build postgres rabbitmq mlflow
 
-stack-full:
-	docker compose --profile serving --profile observability up --build
+train:
+	uv run --frozen --project backend/ml python backend/ml/src/train.py
+
+stack:
+	$(COMPOSE) --profile serving up --build -d
+
+stack-full: stack
 
 stop:
-	docker compose down
+	$(COMPOSE) --profile serving down
+
+test:
+	cd backend/control_api && uv run --frozen --group dev pytest -q
+	cd backend/worker && uv run --frozen --group dev pytest -q
+	cd backend/model_serving && uv run --frozen --group dev pytest -q
+	uv run --frozen --project backend/control_api --group dev python -m pytest -q scripts/tests
+	bun run typecheck

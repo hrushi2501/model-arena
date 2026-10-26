@@ -3,7 +3,7 @@ FROM python:3.12-slim AS builder
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONDONTWRITEBYTECODE=1
 WORKDIR /build
-RUN pip install --no-cache-dir --prefix=/install "mlflow>=3,<4" "psycopg[binary]>=3.2,<4"
+RUN pip install --no-cache-dir --prefix=/install "mlflow==3.17.2" "psycopg[binary]>=3.2,<4"
 
 FROM python:3.12-slim AS runtime
 

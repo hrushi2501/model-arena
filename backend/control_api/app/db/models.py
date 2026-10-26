@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import (
     Boolean,
@@ -22,10 +22,16 @@ class Rollout(Base):
     id = Column(Integer, primary_key=True, index=True)
     champion_version = Column(String(255), nullable=False, default="models:/wine-classifier/1")
     candidate_version = Column(String(255), nullable=False, default="models:/wine-classifier/2")
-    state = Column(String(50), nullable=False, default="READY")  # READY, SHADOW, CANARY, PROMOTED, ROLLED_BACK
+    state = Column(
+        String(50), nullable=False, default="READY"
+    )  # READY, SHADOW, CANARY, PROMOTED, ROLLED_BACK
     canary_percentage = Column(Float, nullable=False, default=0.0)
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
-    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
 
 
 class Prediction(Base):
@@ -35,11 +41,11 @@ class Prediction(Base):
     client_id = Column(String(255), nullable=True, index=True)
     selected_version = Column(String(255), nullable=False)
     selected_role = Column(String(50), nullable=False)  # champion, candidate
-    prediction = Column(Integer, nullable=False)
+    prediction = Column(Integer, nullable=True)
     probabilities_json = Column(Text, nullable=True)
     latency_ms = Column(Float, nullable=False)
     status_code = Column(Integer, default=200)
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
 
 class Feedback(Base):
@@ -48,14 +54,14 @@ class Feedback(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     prediction_id = Column(String(64), nullable=False, index=True)
     ground_truth_label = Column(Integer, nullable=False)
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
 
 class AuditEvent(Base):
     __tablename__ = "audit_events"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    timestamp = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    timestamp = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
     event_type = Column(String(50), nullable=False)  # STAGE_CHANGE, DECISION, ROLLBACK, PROMOTE
     reason = Column(String(500), nullable=False)
     details_json = Column(Text, nullable=True)
@@ -78,4 +84,6 @@ class ShadowOutbox(Base):
 
     prediction_id = Column(String(64), ForeignKey("predictions.id"), primary_key=True)
     payload_json = Column(Text, nullable=False)
-    available_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+    available_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
+    )

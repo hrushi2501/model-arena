@@ -13,6 +13,11 @@ def publish_shadow_task(request_id: str, payload_json: str) -> bool:
     """Return true only after RabbitMQ confirms the persistent, routable event."""
     try:
         parameters = pika.URLParameters(os.getenv("RABBITMQ_URL", "amqp://rabbitmq:5672/"))
+        if not os.getenv("RABBITMQ_URL") and os.getenv("RABBITMQ_PASSWORD"):
+            parameters.host = os.getenv("RABBITMQ_HOST", "rabbitmq")
+            parameters.credentials = pika.PlainCredentials(
+                os.getenv("RABBITMQ_USER", "model_arena"), os.environ["RABBITMQ_PASSWORD"]
+            )
         parameters.socket_timeout = 3
         parameters.stack_timeout = 5
         parameters.blocked_connection_timeout = 5

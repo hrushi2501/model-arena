@@ -5,7 +5,7 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-model_arena}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Copy .env.example to .env and set POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
       POSTGRES_DB: ${POSTGRES_DB:-model_arena}
     ports:
       - "127.0.0.1:5433:5432"
@@ -22,7 +22,7 @@ services:
     hostname: rabbitmq
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-model_arena}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?}
     ports:
       - "127.0.0.1:15672:15672"
     volumes:
@@ -46,10 +46,17 @@ services:
       - sqlite:////mlartifacts/mlflow.db
       - --artifacts-destination
       - /mlartifacts
+      - --allowed-hosts
+      - mlflow:5000,localhost:5001,127.0.0.1:5001
     ports:
       - "127.0.0.1:5001:5000"
     volumes:
       - mlflow_artifacts:/mlartifacts
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:5000/health', headers={'Host': 'mlflow:5000'}))"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
   control-api:
     build:
@@ -58,16 +65,23 @@ services:
     expose:
       - "8000"
     environment:
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-model_arena}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-model_arena}
+      POSTGRES_USER: ${POSTGRES_USER:-model_arena}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: ${POSTGRES_DB:-model_arena}
+      CHAMPION_MODEL_URI: ${CHAMPION_MODEL_URI:-models:/wine-classifier/1}
+      CANDIDATE_MODEL_URI: ${CANDIDATE_MODEL_URI:-models:/wine-classifier/2}
+      ENABLE_DEMO_FAULTS: ${ENABLE_DEMO_FAULTS:-false}
       MLFLOW_TRACKING_URI: http://mlflow:5000
-      RABBITMQ_URL: amqp://${RABBITMQ_USER:-model_arena}:${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}@rabbitmq:5672/
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: ${RABBITMQ_USER:-model_arena}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?}
     depends_on:
       postgres:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
       mlflow:
-        condition: service_started
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live')"]
       interval: 10s
@@ -80,12 +94,13 @@ services:
       dockerfile: Dockerfile
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-model_arena}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
       POSTGRES_DB: ${POSTGRES_DB:-model_arena}
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_USER: ${RABBITMQ_USER:-model_arena}
-      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?}
       CANDIDATE_URL: http://model-candidate:8000
+      CANDIDATE_MODEL_URI: ${CANDIDATE_MODEL_URI:-models:/wine-classifier/2}
     depends_on:
       postgres:
         condition: service_healthy
@@ -98,13 +113,19 @@ services:
       dockerfile: Dockerfile
     environment:
       MODEL_ROLE: champion
-      MODEL_URI: ${CHAMPION_MODEL_URI:-}
+      MODEL_URI: ${CHAMPION_MODEL_URI:-models:/wine-classifier/1}
       MLFLOW_TRACKING_URI: http://mlflow:5000
     expose:
       - "8000"
     profiles: ["serving"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready')"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
     depends_on:
-      - mlflow
+      mlflow:
+        condition: service_healthy
 
   model-candidate:
     build:
@@ -112,13 +133,20 @@ services:
       dockerfile: Dockerfile
     environment:
       MODEL_ROLE: candidate
-      MODEL_URI: ${CANDIDATE_MODEL_URI:-}
+      MODEL_URI: ${CANDIDATE_MODEL_URI:-models:/wine-classifier/2}
+      ENABLE_DEMO_FAULTS: ${ENABLE_DEMO_FAULTS:-false}
       MLFLOW_TRACKING_URI: http://mlflow:5000
     expose:
       - "8000"
     profiles: ["serving"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready')"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
     depends_on:
-      - mlflow
+      mlflow:
+        condition: service_healthy
 
   nginx:
     image: nginx:alpine
@@ -130,39 +158,7 @@ services:
       control-api:
         condition: service_healthy
 
-  prometheus:
-    image: prom/prometheus:latest
-    profiles: ["observability"]
-    command:
-      - --config.file=/etc/prometheus/prometheus.yml
-      - --storage.tsdb.path=/prometheus
-    ports:
-      - "127.0.0.1:9090:9090"
-    volumes:
-      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus_data:/prometheus
-    depends_on:
-      - control-api
-
-  grafana:
-    image: grafana/grafana:latest
-    profiles: ["observability"]
-    environment:
-      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD in .env}
-      GF_USERS_ALLOW_SIGN_UP: "false"
-    ports:
-      - "127.0.0.1:3001:3000"
-    volumes:
-      - grafana_data:/var/lib/grafana
-      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
-    depends_on:
-      - prometheus
-
 volumes:
   postgres_data:
   rabbitmq_data:
   mlflow_artifacts:
-  prometheus_data:
-  grafana_data:

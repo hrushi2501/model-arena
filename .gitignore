@@ -70,8 +70,6 @@ mlflow.db-*
 *.db
 postgres_data/
 rabbitmq_data/
-prometheus_data/
-grafana_data/
 
 # Logs, temporary files, and test reports
 *.log

@@ -123,7 +123,7 @@ def test_decision_engine_rules():
     db.close()
 
 
-def test_decision_engine_promote():
+def test_decision_engine_holds_without_labels():
     db = TestingSessionLocal()
     rollout = Rollout(
         champion_version="models:/wine-classifier/1",
@@ -149,7 +149,8 @@ def test_decision_engine_promote():
     db.commit()
 
     decision, reason, stats = evaluate_rollout(db, rollout)
-    assert decision == "PROMOTE"
+    assert decision == "HOLD"
+    assert stats["candidate_accuracy"] is None
     assert stats["sample_count"] >= 20
 
     # Advance to 100% promotes candidate
@@ -160,7 +161,17 @@ def test_decision_engine_promote():
     db.close()
 
 
-def test_api_full_workflow():
+def test_api_full_workflow(database, monkeypatch):
+    from app.api.v1 import routes
+
+    async def forward(role, url, features, version, **kwargs):
+        return {"prediction": 1, "latency_ms": 10.0, "status_code": 200}
+
+    async def ready(role, url, version):
+        return {"ready": True}
+
+    monkeypatch.setattr(routes, "forward_prediction", forward)
+    monkeypatch.setattr(routes, "model_status", ready)
     client = TestClient(app)
 
     # 1. Health check
@@ -175,9 +186,11 @@ def test_api_full_workflow():
     assert data["state"] == "READY"
     assert data["canary_percentage"] == 0.0
 
-    # 3. Predict endpoint (fallback generates valid output without running model servers)
+    # 3. Predict endpoint with a controlled upstream response
     wine_sample = [13.2, 1.78, 2.14, 11.2, 100.0, 2.65, 2.76, 0.26, 1.28, 4.38, 1.05, 3.4, 1050.0]
-    res = client.post("/api/v1/predict", json={"features": wine_sample, "client_id": "client-user-1"})
+    res = client.post(
+        "/api/v1/predict", json={"features": wine_sample, "client_id": "client-user-1"}
+    )
     assert res.status_code == 200
     pred_data = res.json()
     assert "prediction" in pred_data
@@ -186,15 +199,18 @@ def test_api_full_workflow():
     assert "request_id" in pred_data
 
     # 4. Advance rollout
-    res = client.post("/api/v1/rollouts/advance", json={"canary_percentage": 0.25})
+    res = client.post("/api/v1/rollouts/advance", json={"canary_percentage": 0.10})
     assert res.status_code == 200
-    assert res.json()["canary_percentage"] == 0.25
+    assert res.json()["canary_percentage"] == 0.10
     assert res.json()["state"] == "CANARY"
 
     # 5. Record feedback
     res = client.post(
         "/api/v1/feedback",
-        json={"prediction_id": pred_data["request_id"], "ground_truth_label": pred_data["prediction"]},
+        json={
+            "prediction_id": pred_data["request_id"],
+            "ground_truth_label": pred_data["prediction"],
+        },
     )
     assert res.status_code == 200
     assert res.json()["status"] == "recorded"

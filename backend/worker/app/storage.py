@@ -62,6 +62,7 @@ class ComparisonStore:
                 SELECT id, prediction, :candidate, prediction = :candidate, CURRENT_TIMESTAMP
                 FROM predictions
                 WHERE id = :request_id AND selected_role = 'champion' AND prediction = :champion
+                  AND status_code = 200
                 ON CONFLICT (prediction_id) DO NOTHING
                 RETURNING prediction_id
             """),
